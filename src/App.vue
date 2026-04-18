@@ -316,9 +316,6 @@ function isSyncing(id: string): boolean {
   return syncing.value.has(id);
 }
 
-function _getServerUrl(id: string): string {
-  return serverUrls.value.get(id) || "";
-}
 
 const copiedUrl = ref("");
 
