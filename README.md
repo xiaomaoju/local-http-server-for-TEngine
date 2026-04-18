@@ -4,6 +4,10 @@
 
 替代传统的 `start.bat` + Nginx/Python 方案，提供可视化的 GUI 操作界面，一键启动、一键同步，开箱即用。
 
+![screenshot](docs/screenshot.png)  
+![screenshot](docs/screenshot2.png)
+
+
 ## 功能特性
 
 - **本地 HTTP 静态文件服务器**：基于 Axum 实现高性能异步 HTTP 服务，支持目录浏览、MIME 自动识别、路径安全检查
