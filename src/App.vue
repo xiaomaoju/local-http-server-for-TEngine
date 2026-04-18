@@ -226,7 +226,7 @@ async function checkAndSync() {
 
   // 默认选中最新版本
   const latestVersion = versionList.value[0].version;
-  const currentSynced = infos.length > 0 ? infos[0].synced : null;
+  // const currentSynced = infos.length > 0 ? infos[0].synced : null;
 
   syncConfirm.value = {
     show: true,
@@ -316,7 +316,7 @@ function isSyncing(id: string): boolean {
   return syncing.value.has(id);
 }
 
-function getServerUrl(id: string): string {
+function _getServerUrl(id: string): string {
   return serverUrls.value.get(id) || "";
 }
 
