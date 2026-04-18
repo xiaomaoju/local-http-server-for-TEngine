@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegram/nicegram-public/refs/heads/main/nicegram-public/nicegram-public/nicegram-public/tauri.conf.json",
+  "productName": "TEngine Http Server",
+  "version": "1.0.0",
+  "identifier": "com.tengine.http-server",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "TEngine Http Server",
+        "width": 960,
+        "height": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png"
+    ]
+  },
+  "plugins": {}
+}
