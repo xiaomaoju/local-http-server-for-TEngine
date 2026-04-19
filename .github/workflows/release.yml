@@ -54,3 +54,24 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
+
+      - name: Create Windows portable zip
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $exePath = "src-tauri/target/x86_64-pc-windows-msvc/release/TEngine Http Server.exe"
+          if (Test-Path $exePath) {
+            $zipDir = "portable"
+            New-Item -ItemType Directory -Force -Path $zipDir
+            Copy-Item $exePath "$zipDir/"
+            Compress-Archive -Path "$zipDir/*" -DestinationPath "TEngine-Http-Server-Windows-Portable.zip"
+          }
+
+      - name: Upload portable zip to release
+        if: matrix.platform == 'windows-latest'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TEngine-Http-Server-Windows-Portable.zip
+          tag_name: ${{ github.event.release.tag_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
