@@ -1,9 +1,13 @@
 name: Build & Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -61,9 +65,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.event.release.tag_name }}
-          releaseName: ${{ github.event.release.name }}
-          releaseBody: ${{ github.event.release.body }}
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseBody: |
+            自动构建版本 ${{ github.ref_name }}
+
+            桌面客户端下载：选对应平台的安装包
+            Docker 服务部署：下载 tengine-server.tar.gz + docker-compose.offline.yml + .env.example
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
@@ -85,6 +93,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: TEngine-Http-Server-Windows-Portable.zip
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
