@@ -11,6 +11,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::auth;
 use crate::config::ProjectConfig;
+use crate::serve;
 use crate::storage::Storage;
 use crate::ws;
 use crate::AppState;
@@ -44,6 +45,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(public)
         .merge(protected)
         .merge(ws_route)
+        .route("/res/{*path}", get(serve::serve_resource))
+        .fallback(get(serve::serve_spa))
         .layer(cors)
         .with_state(state)
 }
