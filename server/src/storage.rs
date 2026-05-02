@@ -1,6 +1,13 @@
 use std::fs;
 use std::path::PathBuf;
 
+fn sanitize_path_component(s: &str) -> Result<&str, String> {
+    if s.is_empty() || s.contains('/') || s.contains('\\') || s.contains("..") {
+        return Err(format!("Invalid path component: {}", s));
+    }
+    Ok(s)
+}
+
 pub struct Storage {
     resources_dir: PathBuf,
 }
@@ -10,20 +17,20 @@ impl Storage {
         Self { resources_dir }
     }
 
-    pub fn project_dir(&self, project_name: &str) -> PathBuf {
-        self.resources_dir.join(project_name)
+    pub fn project_dir(&self, project_name: &str) -> Result<PathBuf, String> {
+        Ok(self.resources_dir.join(sanitize_path_component(project_name)?))
     }
 
-    pub fn platform_dir(&self, project_name: &str, platform: &str) -> PathBuf {
-        self.project_dir(project_name).join(platform)
+    pub fn platform_dir(&self, project_name: &str, platform: &str) -> Result<PathBuf, String> {
+        Ok(self.project_dir(project_name)?.join(sanitize_path_component(platform)?))
     }
 
-    pub fn versions_dir(&self, project_name: &str, platform: &str) -> PathBuf {
-        self.platform_dir(project_name, platform).join("_versions")
+    pub fn versions_dir(&self, project_name: &str, platform: &str) -> Result<PathBuf, String> {
+        Ok(self.platform_dir(project_name, platform)?.join("_versions"))
     }
 
-    pub fn version_dir(&self, project_name: &str, platform: &str, version: &str) -> PathBuf {
-        self.versions_dir(project_name, platform).join(version)
+    pub fn version_dir(&self, project_name: &str, platform: &str, version: &str) -> Result<PathBuf, String> {
+        Ok(self.versions_dir(project_name, platform)?.join(sanitize_path_component(version)?))
     }
 
     pub fn save_uploaded_file(
@@ -34,7 +41,8 @@ impl Storage {
         file_name: &str,
         data: &[u8],
     ) -> Result<(), String> {
-        let dir = self.version_dir(project_name, platform, version);
+        sanitize_path_component(file_name)?;
+        let dir = self.version_dir(project_name, platform, version)?;
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create version dir: {}", e))?;
         let path = dir.join(file_name);
         fs::write(&path, data).map_err(|e| format!("Failed to write file: {}", e))?;
@@ -42,7 +50,10 @@ impl Storage {
     }
 
     pub fn list_versions(&self, project_name: &str, platform: &str) -> Vec<VersionEntry> {
-        let dir = self.versions_dir(project_name, platform);
+        let dir = match self.versions_dir(project_name, platform) {
+            Ok(d) => d,
+            Err(_) => return vec![],
+        };
         if !dir.exists() {
             return vec![];
         }
@@ -91,12 +102,12 @@ impl Storage {
         platform: &str,
         version: &str,
     ) -> Result<u32, String> {
-        let version_dir = self.version_dir(project_name, platform, version);
+        let version_dir = self.version_dir(project_name, platform, version)?;
         if !version_dir.exists() {
             return Err(format!("Version directory does not exist: {}", version));
         }
 
-        let platform_dir = self.platform_dir(project_name, platform);
+        let platform_dir = self.platform_dir(project_name, platform)?;
         fs::create_dir_all(&platform_dir)
             .map_err(|e| format!("Failed to create platform dir: {}", e))?;
 
@@ -137,7 +148,7 @@ impl Storage {
         platform: &str,
         version: &str,
     ) -> Result<(), String> {
-        let dir = self.version_dir(project_name, platform, version);
+        let dir = self.version_dir(project_name, platform, version)?;
         if dir.exists() {
             fs::remove_dir_all(&dir)
                 .map_err(|e| format!("Failed to delete version: {}", e))?;
@@ -146,7 +157,7 @@ impl Storage {
     }
 
     pub fn delete_project(&self, project_name: &str) -> Result<(), String> {
-        let dir = self.project_dir(project_name);
+        let dir = self.project_dir(project_name)?;
         if dir.exists() {
             fs::remove_dir_all(&dir)
                 .map_err(|e| format!("Failed to delete project: {}", e))?;

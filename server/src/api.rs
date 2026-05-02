@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{Method, StatusCode},
     middleware,
     routing::{delete, get, post, put},
@@ -31,7 +31,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/projects", post(create_project))
         .route("/api/projects/:id", put(update_project))
         .route("/api/projects/:id", delete(delete_project))
-        .route("/api/projects/:id/upload", post(upload_resources))
+        .route("/api/projects/:id/upload", post(upload_resources).layer(DefaultBodyLimit::max(512 * 1024 * 1024)))
         .route("/api/projects/:id/versions", get(list_versions))
         .route("/api/projects/:id/versions/:ver/activate", put(activate_version))
         .route("/api/projects/:id/versions/:ver", delete(delete_version))
@@ -82,17 +82,35 @@ async fn create_project(
     Ok(Json(project))
 }
 
+#[derive(Deserialize)]
+struct UpdateProjectRequest {
+    project_name: Option<String>,
+    platforms: Option<Vec<String>>,
+    package_name: Option<String>,
+}
+
 async fn update_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(updated): Json<ProjectConfig>,
-) -> Result<StatusCode, StatusCode> {
+    Json(req): Json<UpdateProjectRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
     let mut config = state.app_config.write().await;
     let project = config.projects.iter_mut().find(|p| p.id == id)
-        .ok_or(StatusCode::NOT_FOUND)?;
-    *project = updated;
+        .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+    if let Some(name) = req.project_name {
+        if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
+            return Err((StatusCode::BAD_REQUEST, "Invalid project name".to_string()));
+        }
+        project.project_name = name;
+    }
+    if let Some(platforms) = req.platforms {
+        project.platforms = platforms;
+    }
+    if let Some(package_name) = req.package_name {
+        project.package_name = package_name;
+    }
     config.save(&state.server_config.config_path())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(StatusCode::OK)
 }
 
