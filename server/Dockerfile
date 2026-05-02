@@ -20,5 +20,5 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=server-builder /app/server/target/release/tengine-server /usr/local/bin/tengine-server
 RUN mkdir -p /data
-EXPOSE 8080
+EXPOSE 8082
 CMD ["tengine-server"]

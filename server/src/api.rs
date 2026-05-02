@@ -36,6 +36,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/projects/:id/versions/:ver/activate", put(activate_version))
         .route("/api/projects/:id/versions/:ver", delete(delete_version))
         .route("/api/projects/:id/status", get(project_status))
+        .route("/api/projects/:id/files", get(list_files))
         .layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
 
     let ws_route = Router::new()
@@ -293,4 +294,29 @@ async fn project_status(
         "project_name": project.project_name,
         "active_versions": project.active_versions,
     })))
+}
+
+#[derive(Deserialize)]
+struct ListFilesQuery {
+    platform: Option<String>,
+    /// 不传则列出激活版本（平台根目录），传则列出 _versions/<version>/
+    version: Option<String>,
+}
+
+async fn list_files(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<ListFilesQuery>,
+) -> Result<Json<Vec<crate::storage::FileEntry>>, (StatusCode, String)> {
+    let config = state.app_config.read().await;
+    let project = config.projects.iter().find(|p| p.id == id)
+        .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+    let project_name = project.project_name.clone();
+    drop(config);
+
+    let platform = params.platform.unwrap_or_else(|| "Android".to_string());
+    let storage = Storage::new(state.server_config.resources_dir());
+    let files = storage.list_files(&project_name, &platform, params.version.as_deref())
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(files))
 }

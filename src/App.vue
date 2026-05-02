@@ -1,9 +1,17 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed, shallowRef } from "vue";
 import LocalMode from "./components/LocalMode.vue";
 import RemoteMode from "./components/RemoteMode.vue";
+import SettingsDialog from "./components/SettingsDialog.vue";
+import HelpModal from "./components/HelpModal.vue";
 
 const mode = ref<"local" | "remote">("local");
+const LocalModeRef = shallowRef(LocalMode);
+const RemoteModeRef = shallowRef(RemoteMode);
+const currentMode = computed(() => mode.value === "local" ? LocalModeRef.value : RemoteModeRef.value);
+const showSettings = ref(false);
+const showHelp = ref(false);
+const APP_VERSION = "v1.0.1";
 </script>
 
 <template>
@@ -20,11 +28,22 @@ const mode = ref<"local" | "remote">("local");
           @click="mode = 'remote'"
         >远程模式</button>
       </div>
-      <span class="version">v1.0.0</span>
+      <button class="settings-btn" @click="showSettings = true" title="设置">
+        <span class="gear">⚙</span>
+      </button>
     </div>
 
-    <LocalMode v-if="mode === 'local'" />
-    <RemoteMode v-else />
+    <KeepAlive>
+      <component :is="currentMode" />
+    </KeepAlive>
+
+    <SettingsDialog
+      :show="showSettings"
+      :version="APP_VERSION"
+      @close="showSettings = false"
+      @open-help="showHelp = true"
+    />
+    <HelpModal :show="showHelp" @close="showHelp = false" />
   </div>
 </template>
 
@@ -55,5 +74,39 @@ const mode = ref<"local" | "remote">("local");
 
 .mode-switcher button:hover:not(.active) {
   color: var(--text-primary);
+}
+
+.settings-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, transform 0.3s;
+}
+
+.settings-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent);
+}
+
+.settings-btn:active .gear {
+  transform: rotate(90deg);
+}
+
+.gear {
+  display: inline-block;
+  transition: transform 0.4s;
+  line-height: 1;
+}
+
+.settings-btn:hover .gear {
+  transform: rotate(45deg);
 }
 </style>

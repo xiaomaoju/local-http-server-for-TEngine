@@ -26,6 +26,12 @@ export interface VersionEntry {
   modified_timestamp: number;
 }
 
+export interface FileEntry {
+  name: string;
+  size: number;
+  modified_timestamp: number;
+}
+
 export interface LogEntry {
   timestamp: string;
   type: string;
@@ -50,6 +56,14 @@ class RemoteApi {
 
   isLoggedIn(): boolean {
     return this.token !== null;
+  }
+
+  getToken(): string {
+    return this.token || "";
+  }
+
+  getBaseUrl(): string {
+    return this.baseUrl;
   }
 
   async login(password: string): Promise<boolean> {
@@ -161,6 +175,17 @@ class RemoteApi {
 
   async getProjectStatus(projectId: string): Promise<{ active_versions: Record<string, string> }> {
     return this.request(`/api/projects/${projectId}/status`);
+  }
+
+  /**
+   * List files in a platform.
+   * - version omitted/empty: list active version files (platform root)
+   * - version provided: list files in _versions/<version>/
+   */
+  async listFiles(projectId: string, platform: string, version?: string): Promise<FileEntry[]> {
+    const params = new URLSearchParams({ platform });
+    if (version) params.set("version", version);
+    return this.request(`/api/projects/${projectId}/files?${params.toString()}`);
   }
 
   connectLogs(onMessage: (log: LogEntry) => void, onError?: (err: Event) => void): WebSocket {

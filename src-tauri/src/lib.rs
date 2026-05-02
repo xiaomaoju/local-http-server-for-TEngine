@@ -396,6 +396,112 @@ fn get_local_ips() -> Vec<String> {
     ips
 }
 
+// ===================== Remote Mode Commands =====================
+
+/// 列出本地 Bundles 目录中某平台的所有版本
+#[tauri::command]
+async fn list_local_bundle_versions(
+    bundles_dir: String,
+    package_name: String,
+    platform: String,
+) -> Result<Vec<sync::VersionEntry>, String> {
+    let syncer = sync::ResourceSyncer::new(&bundles_dir, &package_name, &platform);
+    Ok(syncer.list_versions())
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RemoteUploadResult {
+    pub success: bool,
+    pub version: String,
+    pub platform: String,
+    pub file_count: u32,
+}
+
+/// 把本地 Bundles 目录中指定版本的所有文件上传到远程服务器
+#[tauri::command]
+async fn upload_version_to_remote(
+    bundles_dir: String,
+    package_name: String,
+    platform: String,
+    version: String,
+    project_id: String,
+    server_url: String,
+    token: String,
+) -> Result<RemoteUploadResult, String> {
+    use std::path::PathBuf;
+
+    let version_dir = PathBuf::from(&bundles_dir)
+        .join(&platform)
+        .join(&package_name)
+        .join(&version);
+
+    if !version_dir.exists() {
+        return Err(format!("版本目录不存在: {}", version_dir.display()));
+    }
+
+    // 收集要上传的文件
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let read_dir = std::fs::read_dir(&version_dir)
+        .map_err(|e| format!("读取版本目录失败: {}", e))?;
+
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let filename = entry.file_name().to_string_lossy().to_string();
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("读取文件 {} 失败: {}", filename, e))?;
+        files.push((filename, bytes));
+    }
+
+    if files.is_empty() {
+        return Err("版本目录为空".to_string());
+    }
+
+    // 构造 multipart 请求
+    let mut form = reqwest::multipart::Form::new()
+        .text("platform", platform.clone())
+        .text("version", version.clone());
+
+    for (filename, bytes) in files {
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(filename);
+        form = form.part("files", part);
+    }
+
+    let url = format!(
+        "{}/api/projects/{}/upload",
+        server_url.trim_end_matches('/'),
+        project_id
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("构造 HTTP 客户端失败: {}", e))?;
+
+    let res = client
+        .post(&url)
+        .bearer_auth(&token)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("上传请求失败: {}", e))?;
+
+    let status = res.status();
+    if !status.is_success() {
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!("服务器返回 {}: {}", status, body));
+    }
+
+    let result: RemoteUploadResult = res
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败: {}", e))?;
+
+    Ok(result)
+}
+
 // ===================== App Entry =====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -424,6 +530,8 @@ pub fn run() {
             list_versions,
             sync_specific_version,
             get_local_ips,
+            list_local_bundle_versions,
+            upload_version_to_remote,
         ])
         .run(tauri::generate_context!())
         .expect("启动应用失败");

@@ -97,7 +97,7 @@ impl ServerConfig {
         let port: u16 = std::env::var("PORT")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(8080);
+            .unwrap_or(8082);
 
         Self {
             password_hash,

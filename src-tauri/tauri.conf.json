@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegram/nicegram-public/refs/heads/main/nicegram-public/nicegram-public/nicegram-public/tauri.conf.json",
   "productName": "TEngine Http Server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "identifier": "com.tengine.http-server",
   "build": {
     "beforeDevCommand": "npm run dev",

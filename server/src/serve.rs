@@ -66,7 +66,13 @@ pub async fn serve_resource(
         match tokio::fs::read(&canonical).await {
             Ok(bytes) => {
                 broadcast_request_log(&state, 200, "GET", &raw_path);
-                let mime = from_path(&canonical).first_or_octet_stream().to_string();
+                let ext = canonical.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                // YooAsset 元信息文件按文本展示，方便浏览器直接预览
+                let mime = match ext.as_str() {
+                    "version" | "hash" | "report" => "text/plain".to_string(),
+                    "json" => "application/json".to_string(),
+                    _ => from_path(&canonical).first_or_octet_stream().to_string(),
+                };
                 let mut headers = HeaderMap::new();
                 headers.insert(header::CONTENT_TYPE, format!("{}; charset=utf-8", mime).parse().unwrap());
                 headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());

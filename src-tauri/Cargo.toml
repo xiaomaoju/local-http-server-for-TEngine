@@ -1,6 +1,6 @@
 [package]
 name = "tengine-http-server"
-version = "1.0.0"
+version = "1.0.1"
 description = "TEngine Local Asset Server with GUI"
 authors = ["you"]
 edition = "2021"
@@ -29,6 +29,7 @@ notify = "6"
 log = "0.4"
 env_logger = "0.11"
 percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 
 [target.'cfg(windows)'.dependencies]
 junction = "1"

@@ -1,0 +1,58 @@
+name: Docker Image Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: tengine-server:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save and gzip
+        run: |
+          docker save tengine-server:latest | gzip > tengine-server.tar.gz
+          ls -lh tengine-server.tar.gz
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tengine-server-docker
+          path: |
+            tengine-server.tar.gz
+            server/docker-compose.offline.yml
+            server/.env.example
+          retention-days: 30
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tengine-server.tar.gz
+            server/docker-compose.offline.yml
+            server/.env.example
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

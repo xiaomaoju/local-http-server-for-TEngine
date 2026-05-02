@@ -15,3 +15,16 @@ Thumbs.db
 
 # Tauri
 src-tauri/gen/
+
+# Server build artifacts
+server/target/
+server/*.tar
+server/*.tar.gz
+
+# Local env
+.env
+**/.env
+
+# Claude private workspace
+.claude/
+.claire/

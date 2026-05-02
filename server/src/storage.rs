@@ -156,6 +156,48 @@ impl Storage {
         Ok(())
     }
 
+    /// 列出指定版本目录下的所有文件（version 为 None 时列出激活版本，即平台根目录的文件）
+    pub fn list_files(
+        &self,
+        project_name: &str,
+        platform: &str,
+        version: Option<&str>,
+    ) -> Result<Vec<FileEntry>, String> {
+        let dir = match version {
+            Some(v) => self.version_dir(project_name, platform, v)?,
+            None => self.platform_dir(project_name, platform)?,
+        };
+        if !dir.exists() {
+            return Ok(vec![]);
+        }
+        let mut entries = Vec::new();
+        let read_dir = fs::read_dir(&dir).map_err(|e| format!("读取目录失败: {}", e))?;
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let metadata = match fs::metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let size = metadata.len();
+            let modified_timestamp = metadata
+                .modified()
+                .ok()
+                .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+                .unwrap_or(0);
+            entries.push(FileEntry {
+                name,
+                size,
+                modified_timestamp,
+            });
+        }
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(entries)
+    }
+
     pub fn delete_project(&self, project_name: &str) -> Result<(), String> {
         let dir = self.project_dir(project_name)?;
         if dir.exists() {
@@ -171,5 +213,12 @@ pub struct VersionEntry {
     pub version: String,
     pub file_count: u32,
     pub total_size: u64,
+    pub modified_timestamp: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub size: u64,
     pub modified_timestamp: u64,
 }

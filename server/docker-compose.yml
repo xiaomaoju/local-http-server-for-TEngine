@@ -4,7 +4,7 @@ services:
       context: ..
       dockerfile: server/Dockerfile
     ports:
-      - "${PORT:-8080}:${PORT:-8080}"
+      - "${PORT:-8082}:${PORT:-8082}"
     volumes:
       - tengine-data:/data
     env_file:

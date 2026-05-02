@@ -56,7 +56,6 @@ const logPanelHeight = ref(220);
 const syncing = ref<Set<string>>(new Set());
 const syncVersions = ref<Map<string, string>>(new Map());
 const resourceVersions = ref<Map<string, PlatformVersionInfo[]>>(new Map());
-const showHelp = ref(false);
 const syncConfirm = ref<SyncConfirmData>({ show: false, versions: [], selectedVersion: "" });
 const toast = ref<{ show: boolean; message: string }>({ show: false, message: "" });
 const versionList = ref<VersionEntry[]>([]);
@@ -372,12 +371,6 @@ function getStatusClass(status: number): string {
   return "s500";
 }
 
-function getExampleUrl(): string {
-  const p = activeProject.value;
-  if (!p) return "http://127.0.0.1:8081/TEngine/Android/";
-  return `http://127.0.0.1:${p.port}/${p.project_name}/`;
-}
-
 // ========== Log panel resize ==========
 let isResizing = false;
 let startY = 0;
@@ -669,170 +662,5 @@ function onResizeEnd() {
       </Transition>
     </Teleport>
 
-    <!-- ==================== Help Modal ==================== -->
-    <Teleport to="body">
-      <div v-if="showHelp" class="help-overlay" @click.self="showHelp = false">
-        <div class="help-modal">
-          <div class="help-header">
-            <h2>使用指南</h2>
-            <button class="help-close" @click="showHelp = false">&times;</button>
-          </div>
-          <div class="help-body">
-
-            <!-- Step 1 -->
-            <div class="help-step">
-              <div class="step-number">1</div>
-              <div class="step-content">
-                <h3>Unity 中构建资源包</h3>
-                <p>在 Unity Editor 中，打开 YooAsset 的构建面板：</p>
-                <div class="step-detail">
-                  <code>YooAsset &rarr; AssetBundle Builder</code>
-                  <ul>
-                    <li>选择 <strong>Build Pipeline</strong>（推荐 ScriptableBuildPipeline）</li>
-                    <li>设置 <strong>Build Output</strong> 输出路径，记住此路径下的 <code>Bundles</code> 目录</li>
-                    <li>选择目标 <strong>Build Target</strong>（Android / iOS / 等）</li>
-                    <li>点击 <strong>Build</strong> 构建资源</li>
-                  </ul>
-                  <p class="step-hint">构建完成后，资源会输出到类似 <code>UnityProject/Bundles/Android/DefaultPackage/</code> 的目录结构中</p>
-                </div>
-              </div>
-            </div>
-
-            <!-- Step 2 -->
-            <div class="help-step">
-              <div class="step-number">2</div>
-              <div class="step-content">
-                <h3>在本软件中配置项目</h3>
-                <div class="step-detail">
-                  <ul>
-                    <li><strong>项目名称</strong>：填写你的项目标识（如 TEngine），会作为 URL 路径的一部分</li>
-                    <li><strong>Bundles 目录</strong>：点击"浏览"选择第 1 步产出的 <code>Bundles</code> 根目录</li>
-                    <li><strong>端口</strong>：默认 8081，多个项目需要使用不同端口</li>
-                    <li><strong>包名</strong>：与 YooAsset 中的 Package Name 一致（通常是 <code>DefaultPackage</code>）</li>
-                    <li><strong>目标平台</strong>：选择你需要测试的平台</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-
-            <!-- Step 3 -->
-            <div class="help-step">
-              <div class="step-number">3</div>
-              <div class="step-content">
-                <h3>同步资源 &amp; 启动服务器</h3>
-                <div class="step-detail">
-                  <ul>
-                    <li>点击 <strong class="accent">&#8635; 同步资源</strong> — 将最新版本的 Bundle 文件同步到服务目录（对应 start.bat 中的 PowerShell 同步逻辑）</li>
-                    <li>点击 <strong class="accent">&#9654; 启动服务</strong> — 启动 HTTP 静态文件服务器</li>
-                    <li>启动后会显示服务 URL，例如：<code>{{ getExampleUrl() }}</code></li>
-                  </ul>
-                  <p class="step-hint">资源更新后只需点击"同步资源"即可，无需重启服务器</p>
-                </div>
-              </div>
-            </div>
-
-            <!-- Step 4 -->
-            <div class="help-step">
-              <div class="step-number">4</div>
-              <div class="step-content">
-                <h3>Unity 中实现 IRemoteServices</h3>
-                <p>在 TEngine 项目中，创建或修改 <code>RemoteServices</code> 类，将 URL 指向本地服务器：</p>
-                <div class="code-block">
-                  <pre><span class="code-kw">public class</span> <span class="code-type">RemoteServices</span> : <span class="code-type">IRemoteServices</span>
-{
-    <span class="code-kw">private readonly string</span> _hostServer;
-
-    <span class="code-kw">public</span> <span class="code-type">RemoteServices</span>(<span class="code-kw">string</span> hostServer)
-    {
-        _hostServer = hostServer;
-    }
-
-    <span class="code-kw">string</span> IRemoteServices.<span class="code-fn">GetRemoteMainURL</span>(<span class="code-kw">string</span> fileName)
-    {
-        <span class="code-kw">return</span> <span class="code-str">$"{_hostServer}/{fileName}"</span>;
-    }
-
-    <span class="code-kw">string</span> IRemoteServices.<span class="code-fn">GetRemoteFallbackURL</span>(<span class="code-kw">string</span> fileName)
-    {
-        <span class="code-kw">return</span> <span class="code-str">$"{_hostServer}/{fileName}"</span>;
-    }
-}</pre>
-                </div>
-              </div>
-            </div>
-
-            <!-- Step 5 -->
-            <div class="help-step">
-              <div class="step-number">5</div>
-              <div class="step-content">
-                <h3>Unity 中配置 HostPlayMode</h3>
-                <p>在资源包初始化代码中，切换到 <code>HostPlayMode</code> 并传入本地服务器地址：</p>
-                <div class="code-block">
-                  <pre><span class="code-comment">// 本地测试服务器地址（从本软件复制）</span>
-<span class="code-kw">string</span> hostServer = <span class="code-str">"{{ getExampleUrl() }}Android"</span>;
-
-<span class="code-comment">// 创建 RemoteServices 实例</span>
-<span class="code-type">IRemoteServices</span> remoteServices = <span class="code-kw">new</span> <span class="code-type">RemoteServices</span>(hostServer);
-
-<span class="code-comment">// 初始化参数 - 使用 HostPlayMode</span>
-<span class="code-kw">var</span> initParameters = <span class="code-kw">new</span> <span class="code-type">HostPlayModeParameters</span>();
-
-<span class="code-comment">// 内置文件系统（首包资源）</span>
-initParameters.BuildinFileSystemParameters =
-    <span class="code-type">FileSystemParameters</span>.<span class="code-fn">CreateDefaultBuildinFileSystemParameters</span>();
-
-<span class="code-comment">// 缓存文件系统（热更资源，关键！传入 remoteServices）</span>
-initParameters.CacheFileSystemParameters =
-    <span class="code-type">FileSystemParameters</span>.<span class="code-fn">CreateDefaultCacheFileSystemParameters</span>(
-        remoteServices
-    );
-
-<span class="code-comment">// 初始化资源包</span>
-<span class="code-kw">var</span> initOperation = package.<span class="code-fn">InitializeAsync</span>(initParameters);
-<span class="code-kw">yield return</span> initOperation;</pre>
-                </div>
-              </div>
-            </div>
-
-            <!-- Step 6 -->
-            <div class="help-step">
-              <div class="step-number">6</div>
-              <div class="step-content">
-                <h3>运行测试</h3>
-                <div class="step-detail">
-                  <ul>
-                    <li>确保本软件中服务器已启动（绿色指示灯亮起）</li>
-                    <li>在 Unity Editor 中 <strong>Play</strong> 运行游戏</li>
-                    <li>游戏会按以下流程请求资源：
-                      <ol>
-                        <li>请求 <code>{PackageName}.version</code> 获取最新版本号</li>
-                        <li>请求 <code>{PackageName}_{version}.hash</code> 校验文件</li>
-                        <li>请求 <code>{PackageName}_{version}.bytes</code> 下载清单</li>
-                        <li>按需请求各个 Bundle 文件</li>
-                      </ol>
-                    </li>
-                    <li>在本软件底部日志面板中可以实时查看所有 HTTP 请求</li>
-                  </ul>
-                  <p class="step-hint">如果请求出现 404，检查 Bundles 目录路径和包名是否正确，或点击"同步资源"刷新</p>
-                </div>
-              </div>
-            </div>
-
-            <!-- Tips -->
-            <div class="help-tips">
-              <h3>&#128161; 常用技巧</h3>
-              <ul>
-                <li><strong>热更新测试</strong>：修改资源后在 Unity 中重新 Build，然后回到本软件点击"同步资源"，无需重启服务器</li>
-                <li><strong>多平台测试</strong>：选择多个目标平台，同步资源时会自动处理所有平台的文件</li>
-                <li><strong>多项目</strong>：点击 + 号添加多个项目标签页，每个项目独立配置和服务器</li>
-                <li><strong>手机测试</strong>：手机和电脑在同一局域网下，将 127.0.0.1 替换为电脑的内网 IP 即可</li>
-                <li><strong>日志面板</strong>：拖拽日志面板上边缘可调整高度，点击"日志"标题可折叠/展开</li>
-              </ul>
-            </div>
-
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
