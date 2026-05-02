@@ -35,16 +35,24 @@ impl Default for ProjectConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RemoteConnection {
+    pub server_url: String,
+}
+
 /// 全局应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub projects: Vec<ProjectConfig>,
+    #[serde(default)]
+    pub remote_connections: Vec<RemoteConnection>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             projects: vec![ProjectConfig::default()],
+            remote_connections: vec![],
         }
     }
 }
