@@ -1,0 +1,10 @@
+/Users/children/Documents/Projects/TEngineHttp/.claude/worktrees/confident-gould-e8760a/server/target/debug/deps/shellexpand-7c51e2e149d5f2d3.d: /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/lib.rs /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/strings.rs /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/wtraits.rs /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/funcs.rs
+
+/Users/children/Documents/Projects/TEngineHttp/.claude/worktrees/confident-gould-e8760a/server/target/debug/deps/libshellexpand-7c51e2e149d5f2d3.rlib: /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/lib.rs /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/strings.rs /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/wtraits.rs /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/funcs.rs
+
+/Users/children/Documents/Projects/TEngineHttp/.claude/worktrees/confident-gould-e8760a/server/target/debug/deps/libshellexpand-7c51e2e149d5f2d3.rmeta: /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/lib.rs /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/strings.rs /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/wtraits.rs /Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/funcs.rs
+
+/Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/lib.rs:
+/Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/strings.rs:
+/Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/wtraits.rs:
+/Users/children/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shellexpand-3.1.2/src/funcs.rs:
