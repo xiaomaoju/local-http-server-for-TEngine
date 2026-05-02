@@ -1,0 +1,15 @@
+services:
+  tengine-server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    volumes:
+      - tengine-data:/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  tengine-data:
