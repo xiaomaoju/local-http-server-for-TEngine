@@ -1,3 +1,16 @@
+import { sha256 } from "js-sha256";
+
+async function sha256Hex(input: string): Promise<string> {
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    const data = new TextEncoder().encode(input);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  return sha256(input);
+}
+
 export interface ProjectConfig {
   id: string;
   project_name: string;
@@ -40,11 +53,7 @@ class RemoteApi {
   }
 
   async login(password: string): Promise<boolean> {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(password);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    const hashHex = await sha256Hex(password);
 
     const res = await fetch(`${this.baseUrl}/api/auth/login`, {
       method: "POST",

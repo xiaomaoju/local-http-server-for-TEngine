@@ -7,7 +7,7 @@ COPY web-admin/ ./
 RUN npm run build
 
 # Stage 2: Build server
-FROM rust:1.78-bookworm AS server-builder
+FROM rust:1.90-bookworm AS server-builder
 WORKDIR /app
 COPY server/Cargo.toml server/Cargo.lock* ./server/
 COPY server/src/ ./server/src/
