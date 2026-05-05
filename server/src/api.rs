@@ -32,6 +32,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/projects/:id", put(update_project))
         .route("/api/projects/:id", delete(delete_project))
         .route("/api/projects/:id/upload", post(upload_resources).layer(DefaultBodyLimit::max(512 * 1024 * 1024)))
+        .route("/api/projects/:id/incremental-upload", post(incremental_upload).layer(DefaultBodyLimit::max(512 * 1024 * 1024)))
+        .route("/api/projects/:id/manifest", get(get_version_manifest))
         .route("/api/projects/:id/versions", get(list_versions))
         .route("/api/projects/:id/versions/:ver/activate", put(activate_version))
         .route("/api/projects/:id/versions/:ver", delete(delete_version))
@@ -198,6 +200,137 @@ async fn upload_resources(
         "version": version,
         "platform": platform,
         "file_count": file_count
+    })))
+}
+
+#[derive(Deserialize)]
+struct ManifestQuery {
+    platform: String,
+    version: String,
+}
+
+async fn get_version_manifest(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<ManifestQuery>,
+) -> Result<Json<Vec<crate::storage::FileManifestEntry>>, (StatusCode, String)> {
+    let config = state.app_config.read().await;
+    let project = config.projects.iter().find(|p| p.id == id)
+        .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+    let project_name = project.project_name.clone();
+    drop(config);
+
+    let storage = Storage::new(state.server_config.resources_dir());
+    let entries = storage.list_files_with_hash(&project_name, &params.platform, &params.version)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(entries))
+}
+
+async fn incremental_upload(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let config = state.app_config.read().await;
+    let project = config.projects.iter().find(|p| p.id == id)
+        .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+    let project_name = project.project_name.clone();
+    drop(config);
+
+    let storage = Storage::new(state.server_config.resources_dir());
+
+    let mut platform = String::new();
+    let mut version = String::new();
+    let mut base_version = String::new();
+    let mut copy_files: Vec<String> = Vec::new();
+    let mut copied_count = 0u32;
+    let mut copied_done = false;
+    let mut uploaded_count = 0u32;
+
+    while let Some(field) = multipart.next_field().await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+
+        match name.as_str() {
+            "platform" => {
+                platform = field.text().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            }
+            "version" => {
+                version = field.text().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            }
+            "base_version" => {
+                base_version = field.text().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            }
+            "copy_files" => {
+                let text = field.text().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+                copy_files = serde_json::from_str(&text)
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("解析 copy_files 失败: {}", e)))?;
+            }
+            "files" => {
+                if platform.is_empty() {
+                    return Err((StatusCode::BAD_REQUEST, "platform 字段必须先于 files".to_string()));
+                }
+                if version.is_empty() {
+                    version = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+                }
+                if base_version.is_empty() {
+                    return Err((StatusCode::BAD_REQUEST, "base_version 字段必须先于 files".to_string()));
+                }
+
+                if !copied_done {
+                    copied_count = storage.copy_files_from_version(
+                        &project_name, &platform, &version, &base_version, &copy_files,
+                    ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                    copied_done = true;
+                }
+
+                let file_name = field.file_name().unwrap_or("unknown").to_string();
+                let data = field.bytes().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+                storage.save_uploaded_file(&project_name, &platform, &version, &file_name, &data)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                uploaded_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    // 没有上传文件（所有文件都未变化）的情况下，仍要执行复制
+    if !copied_done {
+        if platform.is_empty() || base_version.is_empty() {
+            return Err((StatusCode::BAD_REQUEST, "缺少 platform 或 base_version".to_string()));
+        }
+        if version.is_empty() {
+            version = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        }
+        copied_count = storage.copy_files_from_version(
+            &project_name, &platform, &version, &base_version, &copy_files,
+        ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    }
+
+    ws::broadcast_log(&state, ws::make_log(
+        "upload", 200, "POST",
+        &format!("/api/projects/{}/incremental-upload", id),
+        &id,
+        &format!(
+            "增量上传 v{}: 复用 {} 个 + 新上传 {} 个 (基于 {})",
+            version, copied_count, uploaded_count, base_version
+        ),
+    ));
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "version": version,
+        "platform": platform,
+        "base_version": base_version,
+        "copied_count": copied_count,
+        "uploaded_count": uploaded_count,
+        "file_count": copied_count + uploaded_count
     })))
 }
 

@@ -1,4 +1,5 @@
 import { sha256 } from "js-sha256";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 async function sha256Hex(input: string): Promise<string> {
   if (typeof crypto !== "undefined" && crypto.subtle) {
@@ -30,6 +31,12 @@ export interface FileEntry {
   name: string;
   size: number;
   modified_timestamp: number;
+}
+
+export interface FileManifestEntry {
+  name: string;
+  size: number;
+  md5: string;
 }
 
 export interface LogEntry {
@@ -69,7 +76,7 @@ class RemoteApi {
   async login(password: string): Promise<boolean> {
     const hashHex = await sha256Hex(password);
 
-    const res = await fetch(`${this.baseUrl}/api/auth/login`, {
+    const res = await tauriFetch(`${this.baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: hashHex }),
@@ -96,7 +103,7 @@ class RemoteApi {
       headers["Content-Type"] = "application/json";
     }
 
-    const res = await fetch(`${this.baseUrl}${path}`, { ...options, headers });
+    const res = await tauriFetch(`${this.baseUrl}${path}`, { ...options, headers });
 
     if (res.status === 401) {
       this.token = null;
@@ -182,6 +189,18 @@ class RemoteApi {
    * - version omitted/empty: list active version files (platform root)
    * - version provided: list files in _versions/<version>/
    */
+  /**
+   * Fetch file manifest (with MD5) for a specific version on the server.
+   */
+  async getVersionManifest(
+    projectId: string,
+    platform: string,
+    version: string,
+  ): Promise<FileManifestEntry[]> {
+    const params = new URLSearchParams({ platform, version });
+    return this.request(`/api/projects/${projectId}/manifest?${params.toString()}`);
+  }
+
   async listFiles(projectId: string, platform: string, version?: string): Promise<FileEntry[]> {
     const params = new URLSearchParams({ platform });
     if (version) params.set("version", version);

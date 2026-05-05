@@ -222,3 +222,74 @@ pub struct FileEntry {
     pub size: u64,
     pub modified_timestamp: u64,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileManifestEntry {
+    pub name: String,
+    pub size: u64,
+    pub md5: String,
+}
+
+impl Storage {
+    /// 列出指定版本目录下所有文件（带 MD5）
+    pub fn list_files_with_hash(
+        &self,
+        project_name: &str,
+        platform: &str,
+        version: &str,
+    ) -> Result<Vec<FileManifestEntry>, String> {
+        use md5::{Digest, Md5};
+
+        let dir = self.version_dir(project_name, platform, version)?;
+        if !dir.exists() {
+            return Err(format!("版本目录不存在: {}", version));
+        }
+        let mut entries = Vec::new();
+        let read_dir = fs::read_dir(&dir).map_err(|e| format!("读取目录失败: {}", e))?;
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let bytes = fs::read(&path).map_err(|e| format!("读取文件 {} 失败: {}", name, e))?;
+            let size = bytes.len() as u64;
+            let mut hasher = Md5::new();
+            hasher.update(&bytes);
+            let md5 = format!("{:x}", hasher.finalize());
+            entries.push(FileManifestEntry { name, size, md5 });
+        }
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(entries)
+    }
+
+    /// 从基础版本复制指定文件到新版本目录（增量上传第一步）
+    pub fn copy_files_from_version(
+        &self,
+        project_name: &str,
+        platform: &str,
+        new_version: &str,
+        base_version: &str,
+        copy_files: &[String],
+    ) -> Result<u32, String> {
+        let base_dir = self.version_dir(project_name, platform, base_version)?;
+        if !base_dir.exists() {
+            return Err(format!("基础版本不存在: {}", base_version));
+        }
+        let new_dir = self.version_dir(project_name, platform, new_version)?;
+        fs::create_dir_all(&new_dir).map_err(|e| format!("创建版本目录失败: {}", e))?;
+
+        let mut count = 0u32;
+        for name in copy_files {
+            sanitize_path_component(name)?;
+            let src = base_dir.join(name);
+            if !src.exists() {
+                return Err(format!("基础版本中不存在文件: {}", name));
+            }
+            let dst = new_dir.join(name);
+            fs::copy(&src, &dst).map_err(|e| format!("复制文件 {} 失败: {}", name, e))?;
+            count += 1;
+        }
+        Ok(count)
+    }
+}

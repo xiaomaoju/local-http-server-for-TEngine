@@ -841,17 +841,26 @@ body {
   font-size: 12px;
 }
 
+/* ========== Local mode root (flex column for resizable log panel) ========== */
+.local-mode {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 /* ========== Log Panel ========== */
 .log-panel {
   border-top: 1px solid var(--border);
   background: var(--bg-primary);
   display: flex;
   flex-direction: column;
-  transition: height 0.3s ease;
+  flex-shrink: 0;
 }
-
+/* 仅在折叠/展开切换时应用过渡，拖动调整时不带动画 */
 .log-panel.collapsed {
   height: 36px !important;
+  transition: height 0.25s ease;
 }
 
 .log-header {

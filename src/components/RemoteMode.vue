@@ -18,7 +18,7 @@ async function viewFile(fileName: string) {
     console.error("Failed to open URL:", e);
   }
 }
-import { api, type ProjectConfig, type VersionEntry, type LogEntry, type FileEntry } from "../api/remote";
+import { api, type ProjectConfig, type VersionEntry, type LogEntry, type FileEntry, type FileManifestEntry } from "../api/remote";
 
 interface LocalVersionEntry {
   version: string;
@@ -166,6 +166,120 @@ const syncDialog = ref<{
   error: "",
 });
 
+// === Incremental upload state ===
+interface DiffResult {
+  baseVersion: string;
+  modified: FileManifestEntry[];   // 已修改：本地和远端都有，MD5 不同
+  added: FileManifestEntry[];      // 新增：仅本地有
+  unchanged: FileManifestEntry[];  // 未变化：MD5 相同
+  removed: FileManifestEntry[];    // 已移除：仅远端有（仅展示）
+  totalLocalCount: number;
+  totalLocalSize: number;
+  uploadCount: number;
+  uploadSize: number;
+}
+
+const incrementalEnabled = ref(true);
+const diffDialogOpen = ref(false);
+const diff = ref<DiffResult | null>(null);
+const diffLoading = ref(false);
+const diffError = ref("");
+const diffGroups = ref({ modified: true, added: true, unchanged: false, removed: false });
+
+const canIncremental = computed(() => versions.value.length > 0);
+
+const baseVersionForIncremental = computed(() =>
+  versions.value.length > 0 ? versions.value[0].version : ""
+);
+
+const savedBytes = computed(() =>
+  diff.value ? diff.value.totalLocalSize - diff.value.uploadSize : 0
+);
+const savedPercent = computed(() => {
+  if (!diff.value || diff.value.totalLocalSize === 0) return 0;
+  return Math.round((savedBytes.value / diff.value.totalLocalSize) * 100);
+});
+
+async function computeDiff() {
+  const project = activeProject.value;
+  if (!project || !syncDialog.value.selectedVersion) return;
+  if (!canIncremental.value) return;
+
+  const baseVersion = baseVersionForIncremental.value;
+  const localVersion = syncDialog.value.selectedVersion;
+
+  diffLoading.value = true;
+  diffError.value = "";
+  diffDialogOpen.value = false;
+  diff.value = null;
+
+  try {
+    const [local, remote] = await Promise.all([
+      invoke<FileManifestEntry[]>("compute_local_manifest", {
+        bundlesDir: currentBundlesDir.value,
+        packageName: project.package_name,
+        platform: selectedPlatform.value,
+        version: localVersion,
+      }),
+      api.getVersionManifest(project.id, selectedPlatform.value, baseVersion),
+    ]);
+
+    const remoteMap = new Map(remote.map((f) => [f.name, f]));
+    const localMap = new Map(local.map((f) => [f.name, f]));
+
+    const modified: FileManifestEntry[] = [];
+    const added: FileManifestEntry[] = [];
+    const unchanged: FileManifestEntry[] = [];
+    for (const f of local) {
+      const r = remoteMap.get(f.name);
+      if (!r) {
+        added.push(f);
+      } else if (r.md5 !== f.md5 || r.size !== f.size) {
+        modified.push(f);
+      } else {
+        unchanged.push(f);
+      }
+    }
+    const removed: FileManifestEntry[] = [];
+    for (const f of remote) {
+      if (!localMap.has(f.name)) removed.push(f);
+    }
+
+    const totalLocalSize = local.reduce((s, f) => s + f.size, 0);
+    const uploadList = [...modified, ...added];
+    const uploadSize = uploadList.reduce((s, f) => s + f.size, 0);
+
+    diff.value = {
+      baseVersion,
+      modified,
+      added,
+      unchanged,
+      removed,
+      totalLocalCount: local.length,
+      totalLocalSize,
+      uploadCount: uploadList.length,
+      uploadSize,
+    };
+  } catch (e: any) {
+    diffError.value = `计算差异失败: ${e?.message || e}`;
+  } finally {
+    diffLoading.value = false;
+  }
+}
+
+function selectSyncVersion(version: string) {
+  syncDialog.value.selectedVersion = version;
+  if (incrementalEnabled.value && canIncremental.value) {
+    computeDiff();
+  }
+}
+
+watch(incrementalEnabled, (val) => {
+  if (val && canIncremental.value && syncDialog.value.selectedVersion && !diff.value && !diffLoading.value) {
+    computeDiff();
+  }
+});
+
 const AVAILABLE_PLATFORMS = ["Android", "iOS", "Windows", "MacOS", "Linux", "WebGL"];
 
 const activeProject = computed(() =>
@@ -194,7 +308,9 @@ async function handleLogin() {
       loginError.value = "密码错误";
     }
   } catch (e: any) {
-    loginError.value = `连接失败: ${e.message}`;
+    console.error("[Login error]", e);
+    const detail = e?.message || e?.toString?.() || (typeof e === "string" ? e : JSON.stringify(e));
+    loginError.value = `连接失败: ${detail}`;
   } finally {
     loginLoading.value = false;
   }
@@ -389,6 +505,12 @@ async function startSync() {
     selectedVersion: "",
     error: "",
   };
+  // Reset incremental state
+  diff.value = null;
+  diffError.value = "";
+  diffDialogOpen.value = false;
+  // 服务器无版本时禁用增量上传
+  incrementalEnabled.value = canIncremental.value;
 
   try {
     const list = await invoke<LocalVersionEntry[]>("list_local_bundle_versions", {
@@ -397,7 +519,9 @@ async function startSync() {
       platform: selectedPlatform.value,
     });
     syncDialog.value.versions = list;
-    syncDialog.value.selectedVersion = list.length > 0 ? list[0].version : "";
+    if (list.length > 0) {
+      syncDialog.value.selectedVersion = list[0].version;
+    }
     if (list.length === 0) {
       syncDialog.value.error = `在 ${selectedPlatform.value}/${project.package_name}/ 下未找到任何版本`;
     }
@@ -406,6 +530,11 @@ async function startSync() {
   } finally {
     syncDialog.value.loading = false;
   }
+
+  // 自动触发差异计算
+  if (incrementalEnabled.value && syncDialog.value.selectedVersion) {
+    computeDiff();
+  }
 }
 
 async function confirmSync() {
@@ -413,20 +542,39 @@ async function confirmSync() {
   if (!project || !syncDialog.value.selectedVersion) return;
 
   const version = syncDialog.value.selectedVersion;
+  const useIncremental =
+    incrementalEnabled.value && canIncremental.value && diff.value !== null;
   syncDialog.value.show = false;
   uploading.value = true;
 
   try {
     const token = api.getToken();
-    await invoke("upload_version_to_remote", {
-      bundlesDir: currentBundlesDir.value,
-      packageName: project.package_name,
-      platform: selectedPlatform.value,
-      version,
-      projectId: project.id,
-      serverUrl: serverUrl.value,
-      token,
-    });
+    if (useIncremental && diff.value) {
+      const uploadFiles = [...diff.value.modified, ...diff.value.added].map((f) => f.name);
+      const copyFiles = diff.value.unchanged.map((f) => f.name);
+      await invoke("incremental_upload_to_remote", {
+        bundlesDir: currentBundlesDir.value,
+        packageName: project.package_name,
+        platform: selectedPlatform.value,
+        version,
+        projectId: project.id,
+        serverUrl: serverUrl.value,
+        token,
+        baseVersion: diff.value.baseVersion,
+        copyFiles,
+        uploadFiles,
+      });
+    } else {
+      await invoke("upload_version_to_remote", {
+        bundlesDir: currentBundlesDir.value,
+        packageName: project.package_name,
+        platform: selectedPlatform.value,
+        version,
+        projectId: project.id,
+        serverUrl: serverUrl.value,
+        token,
+      });
+    }
     await loadVersions();
     // Auto-activate the just-uploaded version
     await activateVersion(version);
@@ -717,9 +865,9 @@ onUnmounted(() => { ws?.close(); });
             :key="v.version"
             class="rm-dialog-version"
             :class="{ active: syncDialog.selectedVersion === v.version }"
-            @click="syncDialog.selectedVersion = v.version"
+            @click="selectSyncVersion(v.version)"
           >
-            <input type="radio" :value="v.version" v-model="syncDialog.selectedVersion" />
+            <input type="radio" :value="v.version" :checked="syncDialog.selectedVersion === v.version" @change="selectSyncVersion(v.version)" />
             <div class="rm-dialog-version-info">
               <div class="rm-dialog-version-name">{{ v.version }}</div>
               <div class="rm-dialog-version-meta">
@@ -728,13 +876,161 @@ onUnmounted(() => { ws?.close(); });
             </div>
           </div>
         </div>
+
+        <!-- Incremental upload bar -->
+        <div v-if="!syncDialog.loading && !syncDialog.error && syncDialog.versions.length > 0" class="rm-incremental-bar">
+          <label class="rm-incremental-toggle" :class="{ disabled: !canIncremental }" :title="!canIncremental ? '服务器还没有可对比的历史版本' : ''">
+            <input type="checkbox" v-model="incrementalEnabled" :disabled="!canIncremental" />
+            <span class="rm-toggle-label">增量上传</span>
+          </label>
+
+          <span v-if="!canIncremental" class="rm-hint-muted">服务器无可对比版本</span>
+          <template v-else-if="incrementalEnabled">
+            <span v-if="diffLoading" class="rm-hint-muted">
+              <span class="rm-spinner"></span>
+              计算差异中…
+            </span>
+            <span v-else-if="diffError" class="rm-hint-error">{{ diffError }}</span>
+            <span v-else-if="diff" class="rm-savings-pill">
+              ↓ 节省 {{ formatSize(savedBytes) }} ({{ savedPercent }}%)
+            </span>
+          </template>
+
+          <button
+            v-if="diff && !diffLoading"
+            class="rm-link-btn"
+            @click="diffDialogOpen = true"
+          >显示更多 →</button>
+        </div>
+
         <div class="rm-dialog-actions">
           <button class="btn btn-secondary" @click="syncDialog.show = false">取消</button>
           <button
             class="btn btn-primary"
             @click="confirmSync"
-            :disabled="!syncDialog.selectedVersion || syncDialog.loading"
-          >上传并激活</button>
+            :disabled="!syncDialog.selectedVersion || syncDialog.loading || (incrementalEnabled && diffLoading)"
+          >{{ incrementalEnabled && canIncremental && diff ? '增量上传并激活' : '上传并激活' }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Diff Details Dialog (popup) -->
+    <div v-if="diffDialogOpen && diff" class="rm-dialog-mask" @click.self="diffDialogOpen = false" style="z-index:1100">
+      <div class="rm-dialog rm-diff-dialog">
+        <div class="rm-dialog-head">
+          <h3>
+            上传差异
+            <span class="rm-active-version" style="margin-left:8px">{{ syncDialog.selectedVersion }}</span>
+            <span class="rm-diff-base-pill" style="margin-left:6px">基于 {{ diff.baseVersion }}</span>
+          </h3>
+          <button class="rm-mini-btn" @click="diffDialogOpen = false">关闭</button>
+        </div>
+
+        <!-- Comparison cards + savings -->
+        <div class="rm-diff-summary">
+          <div class="rm-diff-compare">
+            <div class="rm-diff-card">
+              <div class="rm-diff-card-label">全量上传</div>
+              <div class="rm-diff-card-value">{{ formatSize(diff.totalLocalSize) }}</div>
+              <div class="rm-diff-card-meta">{{ diff.totalLocalCount }} 个文件</div>
+            </div>
+            <div class="rm-diff-arrow">→</div>
+            <div class="rm-diff-card rm-diff-card-incremental">
+              <div class="rm-diff-card-label">增量上传</div>
+              <div class="rm-diff-card-value">{{ formatSize(diff.uploadSize) }}</div>
+              <div class="rm-diff-card-meta">{{ diff.uploadCount }} 个文件</div>
+            </div>
+          </div>
+          <div class="rm-savings-banner">
+            <span class="rm-savings-pill rm-savings-pill-large">↓ 节省 {{ formatSize(savedBytes) }} ({{ savedPercent }}%)</span>
+          </div>
+        </div>
+
+        <!-- Category counts -->
+        <div class="rm-diff-cats">
+          <span class="rm-diff-cat rm-cat-modified">
+            <span class="rm-cat-icon">✏️</span> 已修改 <strong>{{ diff.modified.length }}</strong>
+          </span>
+          <span class="rm-diff-cat rm-cat-added">
+            <span class="rm-cat-icon">➕</span> 新增 <strong>{{ diff.added.length }}</strong>
+          </span>
+          <span class="rm-diff-cat rm-cat-unchanged">
+            <span class="rm-cat-icon">✓</span> 未变化 <strong>{{ diff.unchanged.length }}</strong>
+          </span>
+          <span v-if="diff.removed.length > 0" class="rm-diff-cat rm-cat-removed">
+            <span class="rm-cat-icon">🗑️</span> 已移除 <strong>{{ diff.removed.length }}</strong>
+          </span>
+        </div>
+
+        <!-- File groups (modified > added > unchanged > removed) -->
+        <div class="rm-diff-groups">
+          <div v-if="diff.modified.length > 0" class="rm-diff-group">
+            <div class="rm-diff-group-head" @click="diffGroups.modified = !diffGroups.modified">
+              <span class="rm-diff-arrow-tiny">{{ diffGroups.modified ? '▼' : '▶' }}</span>
+              <span class="rm-cat-icon">✏️</span>
+              <span class="rm-diff-group-title">已修改</span>
+              <span class="rm-diff-group-count">{{ diff.modified.length }}</span>
+            </div>
+            <div v-if="diffGroups.modified" class="rm-diff-files">
+              <div v-for="f in diff.modified" :key="'m-'+f.name" class="rm-diff-file" :title="f.name">
+                <span class="rm-diff-file-dot rm-dot-modified"></span>
+                <span class="rm-diff-file-name">{{ f.name }}</span>
+                <span class="rm-diff-file-size">{{ formatSize(f.size) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="diff.added.length > 0" class="rm-diff-group">
+            <div class="rm-diff-group-head" @click="diffGroups.added = !diffGroups.added">
+              <span class="rm-diff-arrow-tiny">{{ diffGroups.added ? '▼' : '▶' }}</span>
+              <span class="rm-cat-icon">➕</span>
+              <span class="rm-diff-group-title">新增</span>
+              <span class="rm-diff-group-count">{{ diff.added.length }}</span>
+            </div>
+            <div v-if="diffGroups.added" class="rm-diff-files">
+              <div v-for="f in diff.added" :key="'a-'+f.name" class="rm-diff-file" :title="f.name">
+                <span class="rm-diff-file-dot rm-dot-added"></span>
+                <span class="rm-diff-file-name">{{ f.name }}</span>
+                <span class="rm-diff-file-size">{{ formatSize(f.size) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="diff.unchanged.length > 0" class="rm-diff-group">
+            <div class="rm-diff-group-head" @click="diffGroups.unchanged = !diffGroups.unchanged">
+              <span class="rm-diff-arrow-tiny">{{ diffGroups.unchanged ? '▼' : '▶' }}</span>
+              <span class="rm-cat-icon">✓</span>
+              <span class="rm-diff-group-title">未变化（服务器复用）</span>
+              <span class="rm-diff-group-count">{{ diff.unchanged.length }}</span>
+            </div>
+            <div v-if="diffGroups.unchanged" class="rm-diff-files">
+              <div v-for="f in diff.unchanged" :key="'u-'+f.name" class="rm-diff-file rm-diff-file-muted" :title="f.name">
+                <span class="rm-diff-file-dot rm-dot-unchanged"></span>
+                <span class="rm-diff-file-name">{{ f.name }}</span>
+                <span class="rm-diff-file-size">{{ formatSize(f.size) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="diff.removed.length > 0" class="rm-diff-group">
+            <div class="rm-diff-group-head" @click="diffGroups.removed = !diffGroups.removed">
+              <span class="rm-diff-arrow-tiny">{{ diffGroups.removed ? '▼' : '▶' }}</span>
+              <span class="rm-cat-icon">🗑️</span>
+              <span class="rm-diff-group-title">服务器旧版有但本地无</span>
+              <span class="rm-diff-group-count">{{ diff.removed.length }}</span>
+            </div>
+            <div v-if="diffGroups.removed" class="rm-diff-files">
+              <div v-for="f in diff.removed" :key="'r-'+f.name" class="rm-diff-file rm-diff-file-muted" :title="f.name">
+                <span class="rm-diff-file-dot rm-dot-removed"></span>
+                <span class="rm-diff-file-name">{{ f.name }}</span>
+                <span class="rm-diff-file-size">{{ formatSize(f.size) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="rm-dialog-actions">
+          <button class="btn btn-primary" @click="diffDialogOpen = false">确定</button>
         </div>
       </div>
     </div>
@@ -1367,5 +1663,365 @@ onUnmounted(() => { ws?.close(); });
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+}
+
+/* === Incremental upload === */
+.rm-diff-dialog {
+  width: 760px;
+  max-width: 92vw;
+  max-height: 88vh;
+}
+
+.rm-diff-dialog .rm-dialog-head {
+  margin-bottom: 14px;
+}
+
+.rm-diff-base-pill {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: normal;
+}
+
+.rm-diff-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+.rm-diff-summary .rm-diff-compare {
+  flex: 1;
+}
+.rm-savings-banner {
+  flex-shrink: 0;
+}
+.rm-savings-pill-large {
+  font-size: 13px;
+  padding: 6px 14px;
+}
+
+.rm-incremental-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin: 4px 0 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.rm-incremental-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.rm-incremental-toggle input {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.rm-incremental-toggle.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rm-incremental-toggle.disabled input {
+  cursor: not-allowed;
+}
+
+.rm-toggle-label {
+  font-size: 12px;
+}
+
+.rm-hint-muted {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.rm-hint-error {
+  color: #ff6b6b;
+  font-size: 11px;
+}
+
+.rm-savings-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.35);
+  color: #4ade80;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.rm-link-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-family: inherit;
+}
+.rm-link-btn:hover {
+  opacity: 0.8;
+}
+
+.rm-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(34, 211, 238, 0.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: rm-spin 0.7s linear infinite;
+}
+@keyframes rm-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Diff panel */
+.rm-diff-panel {
+  margin: 0 0 12px;
+  padding: 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 380px;
+  overflow-y: auto;
+  animation: rm-fade-in 0.18s ease-out;
+}
+@keyframes rm-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.rm-diff-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.rm-diff-base strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.rm-diff-compare {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.rm-diff-card {
+  flex: 1;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rm-diff-card-incremental {
+  border-color: rgba(74, 222, 128, 0.35);
+  background: rgba(74, 222, 128, 0.05);
+}
+.rm-diff-card-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.rm-diff-card-value {
+  font-size: 18px;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.rm-diff-card-incremental .rm-diff-card-value {
+  color: #4ade80;
+}
+.rm-diff-card-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.rm-diff-arrow {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 16px;
+  font-weight: 600;
+  padding: 0 2px;
+}
+
+.rm-diff-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rm-diff-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.rm-diff-cat strong {
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-left: 2px;
+}
+.rm-cat-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+.rm-cat-modified {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.08);
+  color: #fbbf24;
+}
+.rm-cat-modified strong { color: #fbbf24; }
+.rm-cat-added {
+  border-color: rgba(74, 222, 128, 0.35);
+  background: rgba(74, 222, 128, 0.08);
+  color: #4ade80;
+}
+.rm-cat-added strong { color: #4ade80; }
+.rm-cat-unchanged {
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.rm-cat-unchanged strong { color: var(--text-secondary); }
+.rm-cat-removed {
+  border-color: rgba(255, 107, 107, 0.35);
+  background: rgba(255, 107, 107, 0.06);
+  color: #ff6b6b;
+}
+.rm-cat-removed strong { color: #ff6b6b; }
+
+/* File groups */
+.rm-diff-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.rm-diff-group {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.rm-diff-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  user-select: none;
+  transition: background 0.12s;
+}
+.rm-diff-group-head:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.rm-diff-arrow-tiny {
+  width: 10px;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+.rm-diff-group-title {
+  flex: 1;
+  font-weight: 500;
+}
+.rm-diff-group-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rm-diff-files {
+  border-top: 1px solid var(--border);
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.rm-diff-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 26px;
+  font-size: 11.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+}
+.rm-diff-file:last-child {
+  border-bottom: none;
+}
+.rm-diff-file:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.rm-diff-file-muted {
+  color: var(--text-muted);
+}
+.rm-diff-file-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.rm-dot-modified { background: #fbbf24; }
+.rm-dot-added { background: #4ade80; }
+.rm-dot-unchanged { background: rgba(255, 255, 255, 0.2); }
+.rm-dot-removed { background: #ff6b6b; }
+
+.rm-diff-file-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rm-diff-file-size {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
 }
 </style>

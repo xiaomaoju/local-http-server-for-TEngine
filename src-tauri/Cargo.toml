@@ -1,6 +1,6 @@
 [package]
 name = "tengine-http-server"
-version = "1.0.1"
+version = "1.0.2"
 description = "TEngine Local Asset Server with GUI"
 authors = ["you"]
 edition = "2021"
@@ -13,9 +13,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-http = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -30,6 +31,7 @@ log = "0.4"
 env_logger = "0.11"
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
+md-5 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 junction = "1"

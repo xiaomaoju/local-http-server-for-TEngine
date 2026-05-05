@@ -502,6 +502,131 @@ async fn upload_version_to_remote(
     Ok(result)
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileManifestEntry {
+    pub name: String,
+    pub size: u64,
+    pub md5: String,
+}
+
+/// 计算本地版本目录中所有文件的 MD5 清单
+#[tauri::command]
+async fn compute_local_manifest(
+    bundles_dir: String,
+    package_name: String,
+    platform: String,
+    version: String,
+) -> Result<Vec<FileManifestEntry>, String> {
+    use md5::{Digest, Md5};
+    use std::path::PathBuf;
+
+    let version_dir = PathBuf::from(&bundles_dir)
+        .join(&platform)
+        .join(&package_name)
+        .join(&version);
+
+    if !version_dir.exists() {
+        return Err(format!("版本目录不存在: {}", version_dir.display()));
+    }
+
+    let read_dir = std::fs::read_dir(&version_dir)
+        .map_err(|e| format!("读取版本目录失败: {}", e))?;
+
+    let mut entries = Vec::new();
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("读取文件 {} 失败: {}", name, e))?;
+        let size = bytes.len() as u64;
+        let mut hasher = Md5::new();
+        hasher.update(&bytes);
+        let md5 = format!("{:x}", hasher.finalize());
+        entries.push(FileManifestEntry { name, size, md5 });
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+/// 增量上传：只上传 `upload_files` 中的文件，让服务器从 `base_version` 复制 `copy_files`
+#[tauri::command]
+async fn incremental_upload_to_remote(
+    bundles_dir: String,
+    package_name: String,
+    platform: String,
+    version: String,
+    project_id: String,
+    server_url: String,
+    token: String,
+    base_version: String,
+    copy_files: Vec<String>,
+    upload_files: Vec<String>,
+) -> Result<RemoteUploadResult, String> {
+    use std::path::PathBuf;
+
+    let version_dir = PathBuf::from(&bundles_dir)
+        .join(&platform)
+        .join(&package_name)
+        .join(&version);
+
+    if !version_dir.exists() {
+        return Err(format!("版本目录不存在: {}", version_dir.display()));
+    }
+
+    let copy_files_json = serde_json::to_string(&copy_files)
+        .map_err(|e| format!("序列化 copy_files 失败: {}", e))?;
+
+    let mut form = reqwest::multipart::Form::new()
+        .text("platform", platform.clone())
+        .text("version", version.clone())
+        .text("base_version", base_version.clone())
+        .text("copy_files", copy_files_json);
+
+    for filename in &upload_files {
+        let path = version_dir.join(filename);
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("读取文件 {} 失败: {}", filename, e))?;
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(filename.clone());
+        form = form.part("files", part);
+    }
+
+    let url = format!(
+        "{}/api/projects/{}/incremental-upload",
+        server_url.trim_end_matches('/'),
+        project_id
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("构造 HTTP 客户端失败: {}", e))?;
+
+    let res = client
+        .post(&url)
+        .bearer_auth(&token)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("上传请求失败: {}", e))?;
+
+    let status = res.status();
+    if !status.is_success() {
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!("服务器返回 {}: {}", status, body));
+    }
+
+    let json: serde_json::Value = res.json().await.map_err(|e| format!("解析响应失败: {}", e))?;
+    Ok(RemoteUploadResult {
+        success: json["success"].as_bool().unwrap_or(false),
+        version: json["version"].as_str().unwrap_or("").to_string(),
+        platform: json["platform"].as_str().unwrap_or("").to_string(),
+        file_count: json["file_count"].as_u64().unwrap_or(0) as u32,
+    })
+}
+
 // ===================== App Entry =====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -515,6 +640,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_http::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             get_projects,
@@ -532,6 +658,8 @@ pub fn run() {
             get_local_ips,
             list_local_bundle_versions,
             upload_version_to_remote,
+            compute_local_manifest,
+            incremental_upload_to_remote,
         ])
         .run(tauri::generate_context!())
         .expect("启动应用失败");
