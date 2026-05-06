@@ -43,7 +43,7 @@ pub async fn serve_resource(
     let raw_path = req.uri().path().trim_start_matches("/res/").to_string();
     let decoded = percent_decode_str(&raw_path).decode_utf8_lossy().to_string();
 
-    // 拆出前 3 段：project_version / project_name / platform
+    // 拆出 4 段：project_version / project_name / platform / file_path
     let mut parts = decoded.splitn(4, '/');
     let project_version = parts.next().unwrap_or("");
     let project_name = parts.next().unwrap_or("");
@@ -55,14 +55,15 @@ pub async fn serve_resource(
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
 
-    // 1) 查项目
-    let config = state.app_config.read().await;
-    let project = match config.projects.iter().find(|p| p.project_name == project_name) {
-        Some(p) => p.clone(),
-        None => {
-            drop(config);
-            broadcast_request_log(&state, 404, "GET", &raw_path, "");
-            return (StatusCode::NOT_FOUND, "Not found").into_response();
+    // 1) 查项目（克隆后立即释放读锁）
+    let project = {
+        let config = state.app_config.read().await;
+        match config.projects.iter().find(|p| p.project_name == project_name) {
+            Some(p) => p.clone(),
+            None => {
+                broadcast_request_log(&state, 404, "GET", &raw_path, "");
+                return (StatusCode::NOT_FOUND, "Not found").into_response();
+            }
         }
     };
 
@@ -70,12 +71,10 @@ pub async fn serve_resource(
     let pv = match project.project_versions.iter().find(|v| v.name == project_version) {
         Some(v) => v.clone(),
         None => {
-            drop(config);
             broadcast_request_log(&state, 404, "GET", &raw_path, &project.id);
             return (StatusCode::NOT_FOUND, "Not found").into_response();
         }
     };
-    drop(config);
 
     // 3) 平台访问开关
     let settings = match pv.platform_settings.get(platform) {
