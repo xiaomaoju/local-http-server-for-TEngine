@@ -127,6 +127,10 @@ const activeProjectId = ref("");
 const activeProjectVersionName = ref<string>("");
 const newProjectVersionName = ref<string>("");
 const showCreateProjectVersion = ref(false);
+const renamingProjectVersionName = ref<string>("");
+const renameInputValue = ref<string>("");
+const renameInputRef = ref<HTMLInputElement | null>(null);
+let renameCommitted = false;
 const projectSettingsExpanded = ref(false);
 const versions = ref<VersionEntry[]>([]);
 const logs = ref<LogEntry[]>([]);
@@ -694,6 +698,46 @@ async function createProjectVersion() {
   }
 }
 
+function startRenameProjectVersion(name: string) {
+  renamingProjectVersionName.value = name;
+  renameInputValue.value = name;
+  renameCommitted = false;
+  nextTick(() => {
+    renameInputRef.value?.focus();
+    renameInputRef.value?.select();
+  });
+}
+
+function cancelRenameProjectVersion() {
+  renameCommitted = true;
+  renamingProjectVersionName.value = "";
+  renameInputValue.value = "";
+}
+
+async function commitRenameProjectVersion(oldName: string) {
+  if (renameCommitted) return;
+  renameCommitted = true;
+  const proj = activeProject.value;
+  const newName = renameInputValue.value.trim();
+  renamingProjectVersionName.value = "";
+  if (!proj || !newName || newName === oldName) {
+    renameInputValue.value = "";
+    return;
+  }
+  try {
+    await api.renameProjectVersion(proj.id, oldName, newName);
+    const pv = proj.project_versions.find((v) => v.name === oldName);
+    if (pv) pv.name = newName;
+    if (activeProjectVersionName.value === oldName) {
+      activeProjectVersionName.value = newName;
+    }
+  } catch (e: any) {
+    alert(`重命名失败: ${e?.message || e}`);
+  } finally {
+    renameInputValue.value = "";
+  }
+}
+
 async function removeProjectVersion(name: string) {
   const proj = activeProject.value;
   if (!proj) return;
@@ -917,10 +961,24 @@ onUnmounted(() => { ws?.close(); });
         :key="pv.name"
         class="tab tab-l2"
         :class="{ active: activeProjectVersionName === pv.name }"
-        @click="activeProjectVersionName = pv.name"
+        @click="renamingProjectVersionName !== pv.name && (activeProjectVersionName = pv.name)"
+        @dblclick.stop="startRenameProjectVersion(pv.name)"
+        :title="renamingProjectVersionName === pv.name ? '' : '双击重命名'"
       >
-        <span>{{ pv.name }}</span>
-        <button class="close-btn" @click.stop="removeProjectVersion(pv.name)">&times;</button>
+        <input
+          v-if="renamingProjectVersionName === pv.name"
+          class="pv-name-input pv-name-input-inline"
+          v-model="renameInputValue"
+          @keyup.enter="commitRenameProjectVersion(pv.name)"
+          @keyup.escape="cancelRenameProjectVersion"
+          @blur="commitRenameProjectVersion(pv.name)"
+          @click.stop
+          ref="renameInputRef"
+        />
+        <template v-else>
+          <span>{{ pv.name }}</span>
+          <button class="close-btn" @click.stop="removeProjectVersion(pv.name)">&times;</button>
+        </template>
       </div>
       <template v-if="!showCreateProjectVersion">
         <button class="add-tab" @click="showCreateProjectVersion = true" title="添加项目版本">+</button>
@@ -2242,6 +2300,11 @@ onUnmounted(() => { ws?.close(); });
   outline: none;
 }
 .pv-name-input:focus { border-color: var(--accent); }
+.pv-name-input-inline {
+  height: 22px;
+  width: 110px;
+  margin: 0;
+}
 
 .rm-foldable {
   border: 1px solid var(--border);

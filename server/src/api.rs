@@ -35,6 +35,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/projects/:id/project-versions", get(list_project_versions))
         .route("/api/projects/:id/project-versions", post(create_project_version))
         .route("/api/projects/:id/project-versions/:pver", delete(delete_project_version))
+        .route("/api/projects/:id/project-versions/:pver", put(rename_project_version))
         .route(
             "/api/projects/:id/project-versions/:pver/platforms/:plat/access",
             put(set_platform_access),
@@ -572,6 +573,73 @@ async fn delete_project_version(
     // Lock dropped. Disk delete is best-effort (matches delete_project pattern).
     let storage = Storage::new(state.server_config.resources_dir());
     let _ = storage.delete_project_version(&project_name, &pver);
+    Ok(StatusCode::OK)
+}
+
+#[derive(Deserialize)]
+struct RenameProjectVersionRequest {
+    name: String,
+}
+
+async fn rename_project_version(
+    State(state): State<Arc<AppState>>,
+    Path((id, pver)): Path<(String, String)>,
+    Json(req): Json<RenameProjectVersionRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let new_name = req.name.trim().to_string();
+    if new_name.is_empty()
+        || new_name.contains('/')
+        || new_name.contains('\\')
+        || new_name.contains("..")
+    {
+        return Err((StatusCode::BAD_REQUEST, "Invalid project version name".to_string()));
+    }
+    if new_name == pver {
+        return Ok(StatusCode::OK);
+    }
+    let project_name = {
+        let mut config = state.app_config.write().await;
+        let project = config
+            .projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+        if project.project_versions.iter().any(|v| v.name == new_name) {
+            return Err((StatusCode::CONFLICT, "Project version already exists".to_string()));
+        }
+        let pv = project
+            .project_versions
+            .iter_mut()
+            .find(|v| v.name == pver)
+            .ok_or((StatusCode::NOT_FOUND, "Project version not found".to_string()))?;
+        pv.name = new_name.clone();
+        let project_name = project.project_name.clone();
+        config
+            .save(&state.server_config.config_path())
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        project_name
+    };
+
+    let storage = Storage::new(state.server_config.resources_dir());
+    if let Err(e) = storage.rename_project_version(&project_name, &pver, &new_name) {
+        // 元数据已改但磁盘改名失败：回滚元数据
+        let mut config = state.app_config.write().await;
+        if let Some(project) = config.projects.iter_mut().find(|p| p.id == id) {
+            if let Some(pv) = project.project_versions.iter_mut().find(|v| v.name == new_name) {
+                pv.name = pver.clone();
+                let _ = config.save(&state.server_config.config_path());
+            }
+        }
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
+    }
+
+    ws::broadcast_log(&state, ws::make_log(
+        "rename", 200, "PUT",
+        &format!("/api/projects/{}/project-versions/{}", id, pver),
+        &id,
+        &format!("项目版本重命名: {} → {}", pver, new_name),
+    ));
+
     Ok(StatusCode::OK)
 }
 

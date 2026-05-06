@@ -247,6 +247,24 @@ impl Storage {
         Ok(())
     }
 
+    pub fn rename_project_version(
+        &self,
+        project_name: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), String> {
+        let old_dir = self.project_version_dir(project_name, old_name)?;
+        let new_dir = self.project_version_dir(project_name, new_name)?;
+        if !old_dir.exists() {
+            return Ok(());
+        }
+        if new_dir.exists() {
+            return Err(format!("目标目录已存在: {}", new_name));
+        }
+        fs::rename(&old_dir, &new_dir)
+            .map_err(|e| format!("重命名项目版本目录失败: {}", e))
+    }
+
     pub fn delete_project(&self, project_name: &str) -> Result<(), String> {
         let dir = self.project_dir(project_name)?;
         if dir.exists() {

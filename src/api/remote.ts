@@ -171,6 +171,16 @@ class RemoteApi {
     );
   }
 
+  async renameProjectVersion(projectId: string, oldName: string, newName: string): Promise<void> {
+    await this.request(
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(oldName)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ name: newName }),
+      },
+    );
+  }
+
   async setPlatformAccess(
     projectId: string,
     projectVersion: string,
