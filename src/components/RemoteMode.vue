@@ -1041,17 +1041,17 @@ onUnmounted(() => { ws?.close(); });
               <input v-model="activeProject.project_name" class="rm-inline-input" />
               <label class="rm-inline-label">包名</label>
               <input v-model="activeProject.package_name" class="rm-inline-input" />
-            </div>
-            <div class="rm-inline-row" v-if="activeProjectVersion">
-              <label class="rm-inline-label">版本名</label>
-              <input
-                v-model="settingsRenameValue"
-                class="rm-inline-input"
-                :placeholder="activeProjectVersion.name"
-                @keyup.enter="commitSettingsRename"
-                @blur="commitSettingsRename"
-              />
-              <span class="rm-inline-hint">回车保存（当前: {{ activeProjectVersion.name }}）</span>
+              <template v-if="activeProjectVersion">
+                <label class="rm-inline-label">版本名</label>
+                <input
+                  v-model="settingsRenameValue"
+                  class="rm-inline-input"
+                  :placeholder="activeProjectVersion.name"
+                  :title="`当前: ${activeProjectVersion.name}（回车保存）`"
+                  @keyup.enter="commitSettingsRename"
+                  @blur="commitSettingsRename"
+                />
+              </template>
             </div>
             <div class="rm-inline-row">
               <label class="rm-inline-label">平台</label>
@@ -2321,16 +2321,14 @@ onUnmounted(() => { ws?.close(); });
   font-size: 12px;
   padding: 4px 12px;
   height: 28px;
-  transition: padding 0.15s;
-}
-.tab.tab-l2:hover {
-  padding-right: 22px;
-}
-.tab.tab-l2.active {
-  padding-right: 22px;
 }
 .tab.tab-l2 .close-btn {
   margin-left: 4px;
+  transition: margin-left 0.15s;
+}
+.tab.tab-l2:hover .close-btn,
+.tab.tab-l2.active .close-btn {
+  margin-left: 14px;
 }
 .pv-name-input {
   height: 24px;
