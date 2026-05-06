@@ -585,30 +585,41 @@ async fn set_platform_access(
     Path((id, pver, plat)): Path<(String, String, String)>,
     Json(req): Json<SetAccessRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let mut config = state.app_config.write().await;
-    let project = config
-        .projects
-        .iter_mut()
-        .find(|p| p.id == id)
-        .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
-    if !project.platforms.contains(&plat) {
-        return Err((StatusCode::NOT_FOUND, "Platform not declared on project".to_string()));
+    {
+        let mut config = state.app_config.write().await;
+        let project = config
+            .projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+        if !project.platforms.contains(&plat) {
+            return Err((StatusCode::NOT_FOUND, "Platform not declared on project".to_string()));
+        }
+        let pv = project
+            .project_versions
+            .iter_mut()
+            .find(|v| v.name == pver)
+            .ok_or((StatusCode::NOT_FOUND, "Project version not found".to_string()))?;
+        let entry = pv
+            .platform_settings
+            .entry(plat.clone())
+            .or_insert_with(|| crate::config::PlatformSettings {
+                access_enabled: false,
+                active_bundle: None,
+            });
+        entry.access_enabled = req.enabled;
+        config
+            .save(&state.server_config.config_path())
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     }
-    let pv = project
-        .project_versions
-        .iter_mut()
-        .find(|v| v.name == pver)
-        .ok_or((StatusCode::NOT_FOUND, "Project version not found".to_string()))?;
-    let entry = pv
-        .platform_settings
-        .entry(plat.clone())
-        .or_insert_with(|| crate::config::PlatformSettings {
-            access_enabled: false,
-            active_bundle: None,
-        });
-    entry.access_enabled = req.enabled;
-    config
-        .save(&state.server_config.config_path())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let action = if req.enabled { "开启" } else { "关闭" };
+    ws::broadcast_log(&state, ws::make_log(
+        "access", 200, "PUT",
+        &format!("/api/projects/{}/project-versions/{}/platforms/{}/access", id, pver, plat),
+        &id,
+        &format!("{} 平台访问: {} ({})", action, plat, pver),
+    ));
+
     Ok(StatusCode::OK)
 }
