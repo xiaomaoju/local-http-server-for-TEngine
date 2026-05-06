@@ -434,6 +434,9 @@ async function addProject() {
 
 async function removeProject(id: string) {
   if (projects.value.length <= 1) return;
+  const proj = projects.value.find((p) => p.id === id);
+  const name = proj?.project_name || "该项目";
+  if (!confirm(`确认删除项目 "${name}"？项目下所有版本和资源会一并删除，无法恢复。`)) return;
   try {
     await api.deleteProject(id);
     projects.value = projects.value.filter((p) => p.id !== id);
@@ -678,6 +681,7 @@ async function deleteVersion(version: string) {
   const project = activeProject.value;
   const pvName = activeProjectVersionName.value;
   if (!project || !pvName) return;
+  if (!confirm(`确认删除 Bundle 版本 "${version}"？该平台下的所有文件会被删除，无法恢复。`)) return;
   try {
     await api.deleteVersion(project.id, pvName, version, selectedPlatform.value);
     await loadVersions();
@@ -2328,7 +2332,7 @@ onUnmounted(() => { ws?.close(); });
 }
 .tab.tab-l2:hover .close-btn,
 .tab.tab-l2.active .close-btn {
-  margin-left: 14px;
+  margin-left: 28px;
 }
 .pv-name-input {
   height: 24px;
