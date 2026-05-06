@@ -265,6 +265,7 @@ impl Storage {
             .map_err(|e| format!("重命名项目版本目录失败: {}", e))
     }
 
+
     pub fn delete_project(&self, project_name: &str) -> Result<(), String> {
         let dir = self.project_dir(project_name)?;
         if dir.exists() {

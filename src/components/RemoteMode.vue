@@ -131,6 +131,7 @@ const renamingProjectVersionName = ref<string>("");
 const renameInputValue = ref<string>("");
 const renameInputRef = ref<HTMLInputElement | null>(null);
 let renameCommitted = false;
+const settingsRenameValue = ref<string>("");
 const projectSettingsExpanded = ref(false);
 const versions = ref<VersionEntry[]>([]);
 const logs = ref<LogEntry[]>([]);
@@ -714,6 +715,29 @@ function cancelRenameProjectVersion() {
   renameInputValue.value = "";
 }
 
+async function commitSettingsRename() {
+  const proj = activeProject.value;
+  const pv = activeProjectVersion.value;
+  if (!proj || !pv) return;
+  const newName = settingsRenameValue.value.trim();
+  if (!newName || newName === pv.name) {
+    settingsRenameValue.value = "";
+    return;
+  }
+  try {
+    await api.renameProjectVersion(proj.id, pv.name, newName);
+    const target = proj.project_versions.find((v) => v.name === pv.name);
+    if (target) target.name = newName;
+    if (activeProjectVersionName.value === pv.name) {
+      activeProjectVersionName.value = newName;
+    }
+    settingsRenameValue.value = "";
+  } catch (e: any) {
+    alert(`重命名失败: ${e?.message || e}`);
+    settingsRenameValue.value = "";
+  }
+}
+
 async function commitRenameProjectVersion(oldName: string) {
   if (renameCommitted) return;
   renameCommitted = true;
@@ -1017,6 +1041,17 @@ onUnmounted(() => { ws?.close(); });
               <input v-model="activeProject.project_name" class="rm-inline-input" />
               <label class="rm-inline-label">包名</label>
               <input v-model="activeProject.package_name" class="rm-inline-input" />
+            </div>
+            <div class="rm-inline-row" v-if="activeProjectVersion">
+              <label class="rm-inline-label">版本名</label>
+              <input
+                v-model="settingsRenameValue"
+                class="rm-inline-input"
+                :placeholder="activeProjectVersion.name"
+                @keyup.enter="commitSettingsRename"
+                @blur="commitSettingsRename"
+              />
+              <span class="rm-inline-hint">回车保存（当前: {{ activeProjectVersion.name }}）</span>
             </div>
             <div class="rm-inline-row">
               <label class="rm-inline-label">平台</label>
@@ -2286,6 +2321,16 @@ onUnmounted(() => { ws?.close(); });
   font-size: 12px;
   padding: 4px 12px;
   height: 28px;
+  transition: padding 0.15s;
+}
+.tab.tab-l2:hover {
+  padding-right: 22px;
+}
+.tab.tab-l2.active {
+  padding-right: 22px;
+}
+.tab.tab-l2 .close-btn {
+  margin-left: 4px;
 }
 .pv-name-input {
   height: 24px;
@@ -2376,6 +2421,11 @@ onUnmounted(() => { ws?.close(); });
   outline: none;
 }
 .rm-inline-input:focus { border-color: var(--accent); }
+.rm-inline-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
 .rm-inline-select {
   height: 28px;
   padding: 0 10px;
