@@ -762,6 +762,22 @@ function getStatusClass(status: number): string {
 
 function clearLogs() { logs.value = []; }
 
+function logScope(log: LogEntry): string {
+  const projName = projects.value.find((p) => p.id === log.project_id)?.project_name || "";
+  let pver = "";
+  const resMatch = log.path.match(/^\/?res\/([^/]+)\//);
+  if (resMatch) {
+    pver = resMatch[1];
+  } else {
+    const apiMatch = log.path.match(/\/project-versions\/([^/]+)/);
+    if (apiMatch) pver = apiMatch[1];
+  }
+  if (projName && pver) return `${projName}/${pver}`;
+  if (projName) return projName;
+  if (pver) return pver;
+  return "—";
+}
+
 const logPanelOpen = ref(true);
 const logPanelHeight = ref(220);
 
@@ -1286,6 +1302,7 @@ onUnmounted(() => { ws?.close(); });
           <span class="status" :class="getStatusClass(log.status)">
             {{ log.type === "request" ? log.status : log.type?.toUpperCase() }}
           </span>
+          <span class="log-scope">{{ logScope(log) }}</span>
           <span class="path">{{ log.message || log.path }}</span>
         </div>
       </div>

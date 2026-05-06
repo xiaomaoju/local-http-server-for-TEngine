@@ -971,9 +971,24 @@ body {
 .log-entry .status.s404 { color: var(--danger); }
 .log-entry .status.s500 { color: var(--danger); }
 
+.log-entry .log-scope {
+  color: var(--text-muted);
+  font-size: 11px;
+  background: var(--bg-tertiary);
+  padding: 0 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .log-entry .path {
   color: var(--info);
   word-break: break-all;
+  flex: 1;
+  min-width: 0;
 }
 
 .log-entry .tag {
