@@ -21,6 +21,7 @@ struct ServerState {
     bundles_dir: PathBuf,
     project_id: String,
     project_name: String,
+    platform_access: Arc<std::collections::HashMap<String, bool>>,
     log_sender: Arc<tokio::sync::mpsc::Sender<LogEntry>>,
 }
 
@@ -64,6 +65,7 @@ pub async fn start_server(
     project_id: String,
     port: u16,
     cors_enabled: bool,
+    platform_access: std::collections::HashMap<String, bool>,
     log_sender: tokio::sync::mpsc::Sender<LogEntry>,
 ) -> Result<RunningServer, String> {
     let state = ServerState {
@@ -71,6 +73,7 @@ pub async fn start_server(
         bundles_dir,
         project_id: project_id.clone(),
         project_name,
+        platform_access: Arc::new(platform_access),
         log_sender: Arc::new(log_sender),
     };
 
@@ -127,6 +130,18 @@ async fn handle_request_fallback(
     let req_path = raw_path.trim_start_matches('/').to_string();
     let decoded = percent_decode_str(&req_path).decode_utf8_lossy().to_string();
     let file_path = state.server_root.join(&decoded);
+
+    // Platform access check: 取路径首段作为平台
+    if let Some(first_segment) = req_path.split('/').next() {
+        if !first_segment.is_empty() {
+            if let Some(&enabled) = state.platform_access.get(first_segment) {
+                if !enabled {
+                    log_request(&state, 403, "GET", &req_path).await;
+                    return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+                }
+            }
+        }
+    }
 
     // 安全检查：防止路径穿越
     let canonical = match file_path.canonicalize() {

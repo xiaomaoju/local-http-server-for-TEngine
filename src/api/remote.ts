@@ -17,12 +17,22 @@ async function sha256Hex(input: string): Promise<string> {
   return sha256(input);
 }
 
+export interface PlatformSettings {
+  access_enabled: boolean;
+  active_bundle: string | null;
+}
+
+export interface ProjectVersion {
+  name: string;
+  platform_settings: Record<string, PlatformSettings>;
+}
+
 export interface ProjectConfig {
   id: string;
   project_name: string;
   platforms: string[];
   package_name: string;
-  active_versions: Record<string, string>;
+  project_versions: ProjectVersion[];
 }
 
 export interface VersionEntry {
@@ -148,8 +158,52 @@ class RemoteApi {
     await this.request(`/api/projects/${id}`, { method: "DELETE" });
   }
 
+  async listProjectVersions(projectId: string): Promise<ProjectVersion[]> {
+    return this.request(`/api/projects/${projectId}/project-versions`);
+  }
+
+  async createProjectVersion(projectId: string, name: string): Promise<ProjectVersion> {
+    return this.request(`/api/projects/${projectId}/project-versions`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async deleteProjectVersion(projectId: string, name: string): Promise<void> {
+    await this.request(
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async renameProjectVersion(projectId: string, oldName: string, newName: string): Promise<void> {
+    await this.request(
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(oldName)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ name: newName }),
+      },
+    );
+  }
+
+  async setPlatformAccess(
+    projectId: string,
+    projectVersion: string,
+    platform: string,
+    enabled: boolean,
+  ): Promise<void> {
+    await this.request(
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(projectVersion)}/platforms/${encodeURIComponent(platform)}/access`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      },
+    );
+  }
+
   async uploadResources(
     projectId: string,
+    projectVersion: string,
     platform: string,
     version: string,
     files: File[],
@@ -160,56 +214,80 @@ class RemoteApi {
     for (const file of files) {
       formData.append("files", file);
     }
-
-    return this.request(`/api/projects/${projectId}/upload`, {
-      method: "POST",
-      body: formData,
-    });
+    return this.request(
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(projectVersion)}/upload`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
   }
 
-  async listVersions(projectId: string, platform: string): Promise<VersionEntry[]> {
-    return this.request(`/api/projects/${projectId}/versions?platform=${encodeURIComponent(platform)}`);
+  async listVersions(
+    projectId: string,
+    projectVersion: string,
+    platform: string,
+  ): Promise<VersionEntry[]> {
+    return this.request(
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(projectVersion)}/versions?platform=${encodeURIComponent(platform)}`,
+    );
   }
 
-  async activateVersion(projectId: string, version: string, platform: string): Promise<void> {
+  async activateVersion(
+    projectId: string,
+    projectVersion: string,
+    version: string,
+    platform: string,
+  ): Promise<void> {
     await this.request(
-      `/api/projects/${projectId}/versions/${encodeURIComponent(version)}/activate?platform=${encodeURIComponent(platform)}`,
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(projectVersion)}/versions/${encodeURIComponent(version)}/activate?platform=${encodeURIComponent(platform)}`,
       { method: "PUT" },
     );
   }
 
-  async deleteVersion(projectId: string, version: string, platform: string): Promise<void> {
+  async deleteVersion(
+    projectId: string,
+    projectVersion: string,
+    version: string,
+    platform: string,
+  ): Promise<void> {
     await this.request(
-      `/api/projects/${projectId}/versions/${encodeURIComponent(version)}?platform=${encodeURIComponent(platform)}`,
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(projectVersion)}/versions/${encodeURIComponent(version)}?platform=${encodeURIComponent(platform)}`,
       { method: "DELETE" },
     );
   }
 
-  async getProjectStatus(projectId: string): Promise<{ active_versions: Record<string, string> }> {
-    return this.request(`/api/projects/${projectId}/status`);
+  async getProjectStatus(
+    projectId: string,
+    projectVersion: string,
+  ): Promise<{ platform_settings: Record<string, PlatformSettings> }> {
+    return this.request(
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(projectVersion)}/status`,
+    );
   }
 
-  /**
-   * List files in a platform.
-   * - version omitted/empty: list active version files (platform root)
-   * - version provided: list files in _versions/<version>/
-   */
-  /**
-   * Fetch file manifest (with MD5) for a specific version on the server.
-   */
   async getVersionManifest(
     projectId: string,
+    projectVersion: string,
     platform: string,
     version: string,
   ): Promise<FileManifestEntry[]> {
     const params = new URLSearchParams({ platform, version });
-    return this.request(`/api/projects/${projectId}/manifest?${params.toString()}`);
+    return this.request(
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(projectVersion)}/manifest?${params.toString()}`,
+    );
   }
 
-  async listFiles(projectId: string, platform: string, version?: string): Promise<FileEntry[]> {
-    const params = new URLSearchParams({ platform });
-    if (version) params.set("version", version);
-    return this.request(`/api/projects/${projectId}/files?${params.toString()}`);
+  async listFiles(
+    projectId: string,
+    projectVersion: string,
+    platform: string,
+    version: string,
+  ): Promise<FileEntry[]> {
+    const params = new URLSearchParams({ platform, version });
+    return this.request(
+      `/api/projects/${projectId}/project-versions/${encodeURIComponent(projectVersion)}/files?${params.toString()}`,
+    );
   }
 
   async connectLogs(

@@ -19,10 +19,14 @@ pub struct ProjectConfig {
     pub cors_enabled: bool,
     /// 包名 (YooAsset package name, 如 DefaultPackage)
     pub package_name: String,
+    #[serde(default)]
+    pub platform_access: std::collections::HashMap<String, bool>,
 }
 
 impl Default for ProjectConfig {
     fn default() -> Self {
+        let mut platform_access = std::collections::HashMap::new();
+        platform_access.insert("Android".to_string(), true);
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             project_name: "TEngine".to_string(),
@@ -31,6 +35,7 @@ impl Default for ProjectConfig {
             platforms: vec!["Android".to_string()],
             cors_enabled: true,
             package_name: "DefaultPackage".to_string(),
+            platform_access,
         }
     }
 }

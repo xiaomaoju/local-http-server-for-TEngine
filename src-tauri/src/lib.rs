@@ -120,6 +120,7 @@ async fn start_server(
         project_id.clone(),
         project.port,
         project.cors_enabled,
+        project.platform_access.clone(),
         log_tx,
     )
     .await?;
@@ -425,6 +426,7 @@ async fn upload_version_to_remote(
     platform: String,
     version: String,
     project_id: String,
+    project_version: String,
     server_url: String,
     token: String,
 ) -> Result<RemoteUploadResult, String> {
@@ -470,9 +472,10 @@ async fn upload_version_to_remote(
     }
 
     let url = format!(
-        "{}/api/projects/{}/upload",
+        "{}/api/projects/{}/project-versions/{}/upload",
         server_url.trim_end_matches('/'),
-        project_id
+        project_id,
+        urlencoding::encode(&project_version),
     );
 
     let client = reqwest::Client::builder()
@@ -559,6 +562,7 @@ async fn incremental_upload_to_remote(
     platform: String,
     version: String,
     project_id: String,
+    project_version: String,
     server_url: String,
     token: String,
     base_version: String,
@@ -594,9 +598,10 @@ async fn incremental_upload_to_remote(
     }
 
     let url = format!(
-        "{}/api/projects/{}/incremental-upload",
+        "{}/api/projects/{}/project-versions/{}/incremental-upload",
         server_url.trim_end_matches('/'),
-        project_id
+        project_id,
+        urlencoding::encode(&project_version),
     );
 
     let client = reqwest::Client::builder()

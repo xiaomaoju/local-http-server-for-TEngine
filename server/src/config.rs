@@ -5,13 +5,27 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PlatformSettings {
+    pub access_enabled: bool,
+    pub active_bundle: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectVersion {
+    pub name: String,
+    #[serde(default)]
+    pub platform_settings: HashMap<String, PlatformSettings>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub id: String,
     pub project_name: String,
     pub platforms: Vec<String>,
     pub package_name: String,
-    pub active_versions: HashMap<String, String>,
+    #[serde(default)]
+    pub project_versions: Vec<ProjectVersion>,
 }
 
 impl ProjectConfig {
@@ -21,7 +35,7 @@ impl ProjectConfig {
             project_name,
             platforms: vec!["Android".to_string()],
             package_name: "DefaultPackage".to_string(),
-            active_versions: HashMap::new(),
+            project_versions: Vec::new(),
         }
     }
 }

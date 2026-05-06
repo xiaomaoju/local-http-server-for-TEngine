@@ -13,6 +13,7 @@ interface ProjectConfig {
   platforms: string[];
   cors_enabled: boolean;
   package_name: string;
+  platform_access: Record<string, boolean>;
 }
 
 interface LogEntry {
@@ -301,10 +302,20 @@ function togglePlatform(platform: string) {
   if (idx >= 0) {
     if (project.platforms.length > 1) {
       project.platforms.splice(idx, 1);
+      delete project.platform_access[platform];
     }
   } else {
     project.platforms.push(platform);
+    if (!project.platform_access) project.platform_access = {};
+    project.platform_access[platform] = true;
   }
+}
+
+function toggleLocalAccess(platform: string) {
+  const project = activeProject.value;
+  if (!project) return;
+  if (!project.platform_access) project.platform_access = {};
+  project.platform_access[platform] = !(project.platform_access[platform] ?? true);
 }
 
 function isRunning(id: string): boolean {
@@ -465,7 +476,22 @@ function onResizeEnd() {
             <div class="config-field config-platforms-field">
               <label>平台</label>
               <div class="platform-tags">
-                <span v-for="p in AVAILABLE_PLATFORMS" :key="p" class="platform-tag" :class="{ selected: activeProject.platforms.includes(p) }" @click="togglePlatform(p)">{{ p }}</span>
+                <span
+                  v-for="p in AVAILABLE_PLATFORMS"
+                  :key="p"
+                  class="platform-tag"
+                  :class="{ selected: activeProject.platforms.includes(p) }"
+                  @click="togglePlatform(p)"
+                >
+                  {{ p }}
+                  <span
+                    v-if="activeProject.platforms.includes(p)"
+                    class="lm-access-dot"
+                    :class="{ on: activeProject.platform_access?.[p] !== false }"
+                    :title="`访问 ${activeProject.platform_access?.[p] !== false ? '已开启（点击关闭）' : '已关闭（点击开启）'}`"
+                    @click.stop="toggleLocalAccess(p)"
+                  ></span>
+                </span>
               </div>
             </div>
           </div>

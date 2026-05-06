@@ -43,53 +43,116 @@ pub async fn serve_resource(
     let raw_path = req.uri().path().trim_start_matches("/res/").to_string();
     let decoded = percent_decode_str(&raw_path).decode_utf8_lossy().to_string();
 
-    let file_path = state.server_config.resources_dir().join(&decoded);
+    // 拆出 4 段：project_version / project_name / platform / file_path
+    let mut parts = decoded.splitn(4, '/');
+    let project_version = parts.next().unwrap_or("");
+    let project_name = parts.next().unwrap_or("");
+    let platform = parts.next().unwrap_or("");
+    let file_path = parts.next().unwrap_or("");
 
-    let canonical = match file_path.canonicalize() {
-        Ok(p) => p,
-        Err(_) => {
-            broadcast_request_log(&state, 404, "GET", &raw_path);
+    if project_version.is_empty() || project_name.is_empty() || platform.is_empty() || file_path.is_empty() {
+        broadcast_request_log(&state, 404, "GET", &raw_path, "");
+        return (StatusCode::NOT_FOUND, "Not found").into_response();
+    }
+
+    // 1) 查项目（克隆后立即释放读锁）
+    let project = {
+        let config = state.app_config.read().await;
+        match config.projects.iter().find(|p| p.project_name == project_name) {
+            Some(p) => p.clone(),
+            None => {
+                broadcast_request_log(&state, 404, "GET", &raw_path, "");
+                return (StatusCode::NOT_FOUND, "Not found").into_response();
+            }
+        }
+    };
+
+    // 2) 查项目版本
+    let pv = match project.project_versions.iter().find(|v| v.name == project_version) {
+        Some(v) => v.clone(),
+        None => {
+            broadcast_request_log(&state, 404, "GET", &raw_path, &project.id);
             return (StatusCode::NOT_FOUND, "Not found").into_response();
         }
     };
 
-    let resources_canonical = state.server_config.resources_dir()
-        .canonicalize()
-        .unwrap_or_else(|_| state.server_config.resources_dir().clone());
-
-    if !canonical.starts_with(&resources_canonical) {
-        broadcast_request_log(&state, 403, "GET", &raw_path);
+    // 3) 平台访问开关
+    let settings = match pv.platform_settings.get(platform) {
+        Some(s) => s.clone(),
+        None => {
+            broadcast_request_log(&state, 404, "GET", &raw_path, &project.id);
+            return (StatusCode::NOT_FOUND, "Not found").into_response();
+        }
+    };
+    if !settings.access_enabled {
+        broadcast_request_log(&state, 403, "GET", &raw_path, &project.id);
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
     }
 
-    if canonical.is_file() {
-        match tokio::fs::read(&canonical).await {
-            Ok(bytes) => {
-                broadcast_request_log(&state, 200, "GET", &raw_path);
-                let ext = canonical.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                // YooAsset 元信息文件按文本展示，方便浏览器直接预览
-                let mime = match ext.as_str() {
-                    "version" | "hash" | "report" => "text/plain".to_string(),
-                    "json" => "application/json".to_string(),
-                    _ => from_path(&canonical).first_or_octet_stream().to_string(),
-                };
-                let mut headers = HeaderMap::new();
-                headers.insert(header::CONTENT_TYPE, format!("{}; charset=utf-8", mime).parse().unwrap());
-                headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
-                (StatusCode::OK, headers, bytes).into_response()
-            }
-            Err(_) => {
-                broadcast_request_log(&state, 404, "GET", &raw_path);
-                (StatusCode::NOT_FOUND, "Not found").into_response()
-            }
+    // 4) 激活的 bundle
+    let active_bundle = match settings.active_bundle.as_deref() {
+        Some(v) if !v.is_empty() => v.to_string(),
+        _ => {
+            broadcast_request_log(&state, 404, "GET", &raw_path, &project.id);
+            return (StatusCode::NOT_FOUND, "No active bundle").into_response();
         }
-    } else {
-        broadcast_request_log(&state, 404, "GET", &raw_path);
-        (StatusCode::NOT_FOUND, "Not found").into_response()
+    };
+
+    // 5) 文件读取
+    let storage = crate::storage::Storage::new(state.server_config.resources_dir());
+    let version_dir = match storage.version_dir(project_name, project_version, platform, &active_bundle) {
+        Ok(d) => d,
+        Err(_) => {
+            broadcast_request_log(&state, 404, "GET", &raw_path, &project.id);
+            return (StatusCode::NOT_FOUND, "Not found").into_response();
+        }
+    };
+
+    let file_full = version_dir.join(file_path);
+    let canonical = match file_full.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            broadcast_request_log(&state, 404, "GET", &raw_path, &project.id);
+            return (StatusCode::NOT_FOUND, "Not found").into_response();
+        }
+    };
+
+    let resources_canonical = state
+        .server_config
+        .resources_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| state.server_config.resources_dir().clone());
+    if !canonical.starts_with(&resources_canonical) {
+        broadcast_request_log(&state, 403, "GET", &raw_path, &project.id);
+        return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+    }
+
+    if !canonical.is_file() {
+        broadcast_request_log(&state, 404, "GET", &raw_path, &project.id);
+        return (StatusCode::NOT_FOUND, "Not found").into_response();
+    }
+
+    match tokio::fs::read(&canonical).await {
+        Ok(bytes) => {
+            broadcast_request_log(&state, 200, "GET", &raw_path, &project.id);
+            let ext = canonical.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            let mime = match ext.as_str() {
+                "version" | "hash" | "report" => "text/plain".to_string(),
+                "json" => "application/json".to_string(),
+                _ => from_path(&canonical).first_or_octet_stream().to_string(),
+            };
+            let mut headers = HeaderMap::new();
+            headers.insert(header::CONTENT_TYPE, format!("{}; charset=utf-8", mime).parse().unwrap());
+            headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+            (StatusCode::OK, headers, bytes).into_response()
+        }
+        Err(_) => {
+            broadcast_request_log(&state, 404, "GET", &raw_path, &project.id);
+            (StatusCode::NOT_FOUND, "Not found").into_response()
+        }
     }
 }
 
-fn broadcast_request_log(state: &Arc<AppState>, status: u16, method: &str, path: &str) {
-    let project_id = path.split('/').next().unwrap_or("").to_string();
-    ws::broadcast_log(state, ws::make_log("request", status, method, path, &project_id, ""));
+fn broadcast_request_log(state: &Arc<AppState>, status: u16, method: &str, path: &str, project_id: &str) {
+    ws::broadcast_log(state, ws::make_log("request", status, method, path, project_id, ""));
 }
