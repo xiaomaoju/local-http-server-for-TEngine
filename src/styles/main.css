@@ -1067,6 +1067,22 @@ body {
   border-color: var(--accent);
 }
 
+.lm-access-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 6px;
+  background: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.lm-access-dot.on {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
+}
+.lm-access-dot:hover { transform: scale(1.2); }
+
 /* ========== Help Modal ========== */
 .help-overlay {
   position: fixed;

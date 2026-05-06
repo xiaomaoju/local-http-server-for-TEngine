@@ -120,6 +120,7 @@ async fn start_server(
         project_id.clone(),
         project.port,
         project.cors_enabled,
+        project.platform_access.clone(),
         log_tx,
     )
     .await?;
