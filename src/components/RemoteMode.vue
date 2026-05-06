@@ -18,7 +18,7 @@ async function viewFile(fileName: string) {
     console.error("Failed to open URL:", e);
   }
 }
-import { api, type ProjectConfig, type VersionEntry, type LogEntry, type FileEntry, type FileManifestEntry } from "../api/remote";
+import { api, type ProjectConfig, type ProjectVersion, type VersionEntry, type LogEntry, type FileEntry, type FileManifestEntry } from "../api/remote";
 
 interface LocalVersionEntry {
   version: string;
@@ -124,6 +124,10 @@ function persistCurrentConnection() {
 
 const projects = ref<ProjectConfig[]>([]);
 const activeProjectId = ref("");
+const activeProjectVersionName = ref<string>("");
+const newProjectVersionName = ref<string>("");
+const showCreateProjectVersion = ref(false);
+const projectSettingsExpanded = ref(false);
 const versions = ref<VersionEntry[]>([]);
 const logs = ref<LogEntry[]>([]);
 const uploading = ref(false);
@@ -221,7 +225,7 @@ async function computeDiff() {
         platform: selectedPlatform.value,
         version: localVersion,
       }),
-      api.getVersionManifest(project.id, selectedPlatform.value, baseVersion),
+      api.getVersionManifest(project.id, activeProjectVersionName.value, selectedPlatform.value, baseVersion),
     ]);
 
     const remoteMap = new Map(remote.map((f) => [f.name, f]));
@@ -285,6 +289,12 @@ const AVAILABLE_PLATFORMS = ["Android", "iOS", "Windows", "MacOS", "Linux", "Web
 const activeProject = computed(() =>
   projects.value.find((p) => p.id === activeProjectId.value)
 );
+
+const activeProjectVersion = computed<ProjectVersion | undefined>(() => {
+  const proj = activeProject.value;
+  if (!proj) return undefined;
+  return proj.project_versions.find((v) => v.name === activeProjectVersionName.value);
+});
 
 const filteredLogs = computed(() => {
   if (!activeProjectId.value) return logs.value;
@@ -353,10 +363,34 @@ async function loadProjects() {
     projects.value = await api.listProjects();
     if (projects.value.length > 0 && !activeProjectId.value) {
       activeProjectId.value = projects.value[0].id;
-      await loadVersions();
     }
+    syncActiveProjectVersion();
+    if (activeProjectVersion.value) await loadVersions();
   } catch {}
 }
+
+function syncActiveProjectVersion() {
+  const proj = activeProject.value;
+  if (!proj) {
+    activeProjectVersionName.value = "";
+    return;
+  }
+  if (
+    !activeProjectVersionName.value ||
+    !proj.project_versions.some((v) => v.name === activeProjectVersionName.value)
+  ) {
+    activeProjectVersionName.value = proj.project_versions[0]?.name || "";
+  }
+}
+
+watch(() => activeProjectId.value, () => {
+  syncActiveProjectVersion();
+  if (activeProjectVersion.value) loadVersions();
+});
+
+watch(() => activeProjectVersionName.value, () => {
+  if (activeProjectVersion.value) loadVersions();
+});
 
 async function addProject() {
   const name = `Project_${projects.value.length + 1}`;
@@ -390,33 +424,27 @@ watch(() => activeProject.value, () => {
 
 async function loadVersions() {
   const project = activeProject.value;
-  if (!project) return;
+  const pvName = activeProjectVersionName.value;
+  if (!project || !pvName) {
+    versions.value = [];
+    return;
+  }
   try {
-    versions.value = await api.listVersions(project.id, selectedPlatform.value);
-  } catch { versions.value = []; }
+    versions.value = await api.listVersions(project.id, pvName, selectedPlatform.value);
+  } catch {
+    versions.value = [];
+  }
 }
 
 async function openFileBrowser(version: string) {
   const project = activeProject.value;
-  if (!project) return;
-
-  const isActive = project.active_versions[selectedPlatform.value] === version;
-  fileBrowser.value = {
-    show: true,
-    version,
-    isActive,
-    loading: true,
-    files: [],
-    error: "",
-  };
-
+  const pvName = activeProjectVersionName.value;
+  if (!project || !pvName) return;
+  const isActive =
+    activeProjectVersion.value?.platform_settings[selectedPlatform.value]?.active_bundle === version;
+  fileBrowser.value = { show: true, version, isActive, loading: true, files: [], error: "" };
   try {
-    // 激活版本传 undefined 走平台根目录；非激活版本传 version 走 _versions
-    const files = await api.listFiles(
-      project.id,
-      selectedPlatform.value,
-      isActive ? undefined : version,
-    );
+    const files = await api.listFiles(project.id, pvName, selectedPlatform.value, version);
     fileBrowser.value.files = files;
   } catch (e: any) {
     fileBrowser.value.error = `加载失败: ${e?.message || e}`;
@@ -427,8 +455,9 @@ async function openFileBrowser(version: string) {
 
 function buildResourceUrl(fileName: string): string {
   const project = activeProject.value;
-  if (!project) return "";
-  return `${serverUrl.value.replace(/\/$/, "")}/res/${encodeURIComponent(project.project_name)}/${encodeURIComponent(selectedPlatform.value)}/${encodeURIComponent(fileName)}`;
+  const pvName = activeProjectVersionName.value;
+  if (!project || !pvName) return "";
+  return `${serverUrl.value.replace(/\/$/, "")}/res/${encodeURIComponent(pvName)}/${encodeURIComponent(project.project_name)}/${encodeURIComponent(selectedPlatform.value)}/${encodeURIComponent(fileName)}`;
 }
 
 async function copyToClipboard(text: string) {
@@ -558,6 +587,7 @@ async function confirmSync() {
         platform: selectedPlatform.value,
         version,
         projectId: project.id,
+        projectVersion: activeProjectVersionName.value,
         serverUrl: serverUrl.value,
         token,
         baseVersion: diff.value.baseVersion,
@@ -571,6 +601,7 @@ async function confirmSync() {
         platform: selectedPlatform.value,
         version,
         projectId: project.id,
+        projectVersion: activeProjectVersionName.value,
         serverUrl: serverUrl.value,
         token,
       });
@@ -587,20 +618,75 @@ async function confirmSync() {
 
 async function activateVersion(version: string) {
   const project = activeProject.value;
-  if (!project) return;
+  const pvName = activeProjectVersionName.value;
+  if (!project || !pvName) return;
   try {
-    await api.activateVersion(project.id, version, selectedPlatform.value);
-    project.active_versions[selectedPlatform.value] = version;
+    await api.activateVersion(project.id, pvName, version, selectedPlatform.value);
+    const pv = activeProjectVersion.value;
+    if (pv) {
+      const settings = pv.platform_settings[selectedPlatform.value] ?? { access_enabled: true, active_bundle: null };
+      settings.active_bundle = version;
+      pv.platform_settings[selectedPlatform.value] = settings;
+    }
   } catch {}
 }
 
 async function deleteVersion(version: string) {
   const project = activeProject.value;
-  if (!project) return;
+  const pvName = activeProjectVersionName.value;
+  if (!project || !pvName) return;
   try {
-    await api.deleteVersion(project.id, version, selectedPlatform.value);
+    await api.deleteVersion(project.id, pvName, version, selectedPlatform.value);
     await loadVersions();
   } catch {}
+}
+
+async function createProjectVersion() {
+  const proj = activeProject.value;
+  const name = newProjectVersionName.value.trim();
+  if (!proj || !name) return;
+  try {
+    const pv = await api.createProjectVersion(proj.id, name);
+    proj.project_versions.push(pv);
+    activeProjectVersionName.value = pv.name;
+    newProjectVersionName.value = "";
+    showCreateProjectVersion.value = false;
+  } catch (e: any) {
+    alert(`创建失败: ${e?.message || e}`);
+  }
+}
+
+async function removeProjectVersion(name: string) {
+  const proj = activeProject.value;
+  if (!proj) return;
+  if (!confirm(`确认删除项目版本 "${name}"？该版本下所有 bundle 资源会一并删除。`)) return;
+  try {
+    await api.deleteProjectVersion(proj.id, name);
+    proj.project_versions = proj.project_versions.filter((v) => v.name !== name);
+    if (activeProjectVersionName.value === name) {
+      activeProjectVersionName.value = proj.project_versions[0]?.name || "";
+    }
+  } catch (e: any) {
+    alert(`删除失败: ${e?.message || e}`);
+  }
+}
+
+async function togglePlatformAccess(platform: string) {
+  const proj = activeProject.value;
+  const pv = activeProjectVersion.value;
+  if (!proj || !pv) return;
+  const current = pv.platform_settings[platform]?.access_enabled ?? false;
+  const next = !current;
+  try {
+    await api.setPlatformAccess(proj.id, pv.name, platform, next);
+    if (!pv.platform_settings[platform]) {
+      pv.platform_settings[platform] = { access_enabled: next, active_bundle: null };
+    } else {
+      pv.platform_settings[platform].access_enabled = next;
+    }
+  } catch (e: any) {
+    alert(`切换失败: ${e?.message || e}`);
+  }
 }
 
 function togglePlatform(platform: string) {
@@ -759,44 +845,91 @@ onUnmounted(() => { ws?.close(); });
       <button class="btn btn-secondary" @click="disconnect" style="margin-left:auto;font-size:11px;padding:2px 8px;">断开</button>
     </div>
 
-    <!-- Tab Bar -->
+    <!-- L1 Tabs: projects -->
     <div class="tab-bar">
       <div v-for="project in projects" :key="project.id"
         class="tab" :class="{ active: activeProjectId === project.id }"
-        @click="activeProjectId = project.id; loadVersions()">
+        @click="activeProjectId = project.id">
         <span>{{ project.project_name }}</span>
         <button v-if="projects.length > 1" class="close-btn" @click.stop="removeProject(project.id)">&times;</button>
       </div>
       <button class="add-tab" @click="addProject" title="添加项目">+</button>
     </div>
 
+    <!-- L2 Tabs: project versions -->
+    <div v-if="activeProject" class="tab-bar tab-bar-l2">
+      <div
+        v-for="pv in activeProject.project_versions"
+        :key="pv.name"
+        class="tab tab-l2"
+        :class="{ active: activeProjectVersionName === pv.name }"
+        @click="activeProjectVersionName = pv.name"
+      >
+        <span>{{ pv.name }}</span>
+        <button class="close-btn" @click.stop="removeProjectVersion(pv.name)">&times;</button>
+      </div>
+      <template v-if="!showCreateProjectVersion">
+        <button class="add-tab" @click="showCreateProjectVersion = true" title="添加项目版本">+</button>
+      </template>
+      <template v-else>
+        <input
+          class="pv-name-input"
+          v-model="newProjectVersionName"
+          placeholder="v1, v2, prod..."
+          @keyup.enter="createProjectVersion"
+          @keyup.escape="showCreateProjectVersion = false; newProjectVersionName = ''"
+        />
+        <button class="add-tab" @click="createProjectVersion">✓</button>
+        <button class="add-tab" @click="showCreateProjectVersion = false; newProjectVersionName = ''">✕</button>
+      </template>
+    </div>
+
     <!-- Main Content -->
-    <div class="main-content" v-if="activeProject">
+    <div class="main-content" v-if="activeProject && activeProjectVersion">
       <div class="project-panel">
-        <div class="config-compact">
-          <div class="config-row">
-            <div class="config-field">
-              <label>项目名称</label>
-              <input v-model="activeProject.project_name" />
-            </div>
-            <div class="config-field">
-              <label>包名</label>
-              <input v-model="activeProject.package_name" />
-            </div>
+
+        <!-- Foldable project settings -->
+        <div class="rm-foldable">
+          <div class="rm-fold-head" @click="projectSettingsExpanded = !projectSettingsExpanded">
+            <span class="rm-fold-arrow" :class="{ open: projectSettingsExpanded }">▶</span>
+            <span>项目设置</span>
+            <span class="rm-fold-meta">{{ activeProject.project_name }} · {{ activeProject.platforms.join(', ') }}</span>
           </div>
-          <div class="config-row">
-            <div class="config-field config-platforms-field">
-              <label>平台</label>
-              <div class="platform-tags">
-                <span v-for="p in AVAILABLE_PLATFORMS" :key="p" class="platform-tag"
-                  :class="{ selected: activeProject.platforms.includes(p) }"
-                  @click="togglePlatform(p)">{{ p }}</span>
+          <div v-if="projectSettingsExpanded" class="rm-fold-body">
+            <div class="config-row">
+              <div class="config-field"><label>项目名称</label><input v-model="activeProject.project_name" /></div>
+              <div class="config-field"><label>包名</label><input v-model="activeProject.package_name" /></div>
+            </div>
+            <div class="config-row">
+              <div class="config-field config-platforms-field">
+                <label>平台</label>
+                <div class="platform-tags">
+                  <span v-for="p in AVAILABLE_PLATFORMS" :key="p" class="platform-tag"
+                    :class="{ selected: activeProject.platforms.includes(p) }"
+                    @click="togglePlatform(p)">{{ p }}</span>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Bundles dir + Sync -->
+        <!-- Platform access toggle row -->
+        <div class="rm-access-row">
+          <span class="rm-access-label">平台访问</span>
+          <span
+            v-for="p in activeProject.platforms"
+            :key="p"
+            class="rm-access-chip"
+            :class="{ on: activeProjectVersion.platform_settings[p]?.access_enabled }"
+            @click="togglePlatformAccess(p)"
+            :title="`${p} 访问 ${activeProjectVersion.platform_settings[p]?.access_enabled ? '已开启' : '已关闭'}`"
+          >
+            <span class="rm-access-dot"></span>
+            {{ p }}
+          </span>
+        </div>
+
+        <!-- Bundles dir -->
         <div class="config-row">
           <div class="config-field" style="flex:1">
             <label>BUNDLES 目录</label>
@@ -807,6 +940,7 @@ onUnmounted(() => { ws?.close(); });
           </div>
         </div>
 
+        <!-- Sync controls -->
         <div class="control-bar">
           <div class="config-field" style="width:140px">
             <label>同步平台</label>
@@ -819,24 +953,31 @@ onUnmounted(() => { ws?.close(); });
               {{ uploading ? "上传中..." : "▶ 同步资源" }}
             </button>
           </div>
-          <div v-if="activeProject.active_versions[selectedPlatform]" class="server-url" style="margin-left:auto;">
-            当前激活: <strong>{{ activeProject.active_versions[selectedPlatform] }}</strong>
+          <div
+            v-if="activeProjectVersion.platform_settings[selectedPlatform]?.active_bundle"
+            class="server-url"
+            style="margin-left:auto;"
+          >
+            当前激活: <strong>{{ activeProjectVersion.platform_settings[selectedPlatform].active_bundle }}</strong>
           </div>
         </div>
 
         <!-- Versions -->
         <div class="rm-versions-section">
-          <div class="rm-section-label">所有版本</div>
+          <div class="rm-section-label">所有 Bundle 版本</div>
           <div v-if="versions.length > 0" class="rm-versions-list">
             <div v-for="entry in versions" :key="entry.version" class="rm-version-block">
               <div
                 class="rm-version-row"
-                :class="{ current: activeProject.active_versions[selectedPlatform] === entry.version }"
+                :class="{ current: activeProjectVersion.platform_settings[selectedPlatform]?.active_bundle === entry.version }"
               >
                 <div class="rm-version-info">
                   <div class="rm-version-name">
                     {{ entry.version }}
-                    <span v-if="activeProject.active_versions[selectedPlatform] === entry.version" class="rm-active-badge">当前</span>
+                    <span
+                      v-if="activeProjectVersion.platform_settings[selectedPlatform]?.active_bundle === entry.version"
+                      class="rm-active-badge"
+                    >当前</span>
                   </div>
                   <div class="rm-version-meta">
                     {{ entry.file_count }} 个文件 · {{ formatSize(entry.total_size) }} · {{ formatTime(entry.modified_timestamp) }}
@@ -848,9 +989,15 @@ onUnmounted(() => { ws?.close(); });
               </div>
             </div>
           </div>
-          <div v-else style="color:var(--text-muted);font-size:13px;padding:12px 0;">暂无版本，请上传资源</div>
+          <div v-else style="color:var(--text-muted);font-size:13px;padding:12px 0;">该项目版本下暂无 bundle，请上传资源</div>
         </div>
       </div>
+    </div>
+
+    <!-- Empty: no project versions yet -->
+    <div v-else-if="activeProject" class="empty-state">
+      <div class="icon">🏷️</div>
+      <p>该项目还没有项目版本，点击上方 + 创建</p>
     </div>
 
     <!-- Sync Version Dialog -->
@@ -2024,4 +2171,106 @@ onUnmounted(() => { ws?.close(); });
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
 }
+
+.tab-bar-l2 {
+  background: var(--bg-primary);
+  padding: 2px 12px;
+}
+.tab.tab-l2 {
+  font-size: 12px;
+  padding: 4px 12px;
+  height: 28px;
+}
+.pv-name-input {
+  height: 24px;
+  padding: 0 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+  width: 140px;
+  margin: 0 4px;
+  outline: none;
+}
+.pv-name-input:focus { border-color: var(--accent); }
+
+.rm-foldable {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 8px 0;
+  overflow: hidden;
+}
+.rm-fold-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.rm-fold-head:hover { background: var(--bg-secondary); }
+.rm-fold-arrow {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 0.15s;
+  color: var(--text-muted);
+}
+.rm-fold-arrow.open { transform: rotate(90deg); }
+.rm-fold-meta {
+  margin-left: auto;
+  font-weight: normal;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.rm-fold-body { padding: 10px 12px; }
+
+.rm-access-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
+.rm-access-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.rm-access-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s;
+}
+.rm-access-chip:hover { border-color: var(--accent); }
+.rm-access-chip.on {
+  background: rgba(74, 222, 128, 0.10);
+  border-color: rgba(74, 222, 128, 0.45);
+  color: #4ade80;
+}
+.rm-access-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.rm-access-chip.on .rm-access-dot { background: #4ade80; }
 </style>
