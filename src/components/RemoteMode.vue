@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, ask } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 
 const VIEWABLE_EXTS = ["version", "hash", "report", "json", "txt", "log", "xml", "yaml", "yml", "csv"];
@@ -450,7 +450,13 @@ async function removeProject(id: string) {
   if (projects.value.length <= 1) return;
   const proj = projects.value.find((p) => p.id === id);
   const name = proj?.project_name || "该项目";
-  if (!confirm(`确认删除项目 "${name}"？项目下所有版本和资源会一并删除，无法恢复。`)) return;
+  const ok = await ask(`项目下所有版本和资源会一并删除，无法恢复。`, {
+    title: `确认删除项目 "${name}"？`,
+    kind: "warning",
+    okLabel: "删除",
+    cancelLabel: "取消",
+  });
+  if (!ok) return;
   try {
     await api.deleteProject(id);
     projects.value = projects.value.filter((p) => p.id !== id);
@@ -695,7 +701,13 @@ async function deleteVersion(version: string) {
   const project = activeProject.value;
   const pvName = activeProjectVersionName.value;
   if (!project || !pvName) return;
-  if (!confirm(`确认删除 Bundle 版本 "${version}"？该平台下的所有文件会被删除，无法恢复。`)) return;
+  const ok = await ask(`该平台下的所有文件会被删除，无法恢复。`, {
+    title: `确认删除 Bundle 版本 "${version}"？`,
+    kind: "warning",
+    okLabel: "删除",
+    cancelLabel: "取消",
+  });
+  if (!ok) return;
   try {
     await api.deleteVersion(project.id, pvName, version, selectedPlatform.value);
     await loadVersions();
@@ -783,7 +795,13 @@ async function commitRenameProjectVersion(oldName: string) {
 async function removeProjectVersion(name: string) {
   const proj = activeProject.value;
   if (!proj) return;
-  if (!confirm(`确认删除项目版本 "${name}"？该版本下所有 bundle 资源会一并删除。`)) return;
+  const ok = await ask(`该版本下所有 bundle 资源会一并删除，无法恢复。`, {
+    title: `确认删除项目版本 "${name}"？`,
+    kind: "warning",
+    okLabel: "删除",
+    cancelLabel: "取消",
+  });
+  if (!ok) return;
   try {
     await api.deleteProjectVersion(proj.id, name);
     proj.project_versions = proj.project_versions.filter((v) => v.name !== name);
