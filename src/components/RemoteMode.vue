@@ -367,13 +367,19 @@ function connectWebSocket() {
 
 async function loadProjects() {
   try {
-    projects.value = await api.listProjects();
+    const list = await api.listProjects();
+    projects.value = list.map((p) => ({
+      ...p,
+      project_versions: Array.isArray(p.project_versions) ? p.project_versions : [],
+    }));
     if (projects.value.length > 0 && !activeProjectId.value) {
       activeProjectId.value = projects.value[0].id;
     }
     syncActiveProjectVersion();
     if (activeProjectVersion.value) await loadVersions();
-  } catch {}
+  } catch (e) {
+    console.error("[loadProjects] error", e);
+  }
 }
 
 function syncActiveProjectVersion() {
@@ -382,11 +388,12 @@ function syncActiveProjectVersion() {
     activeProjectVersionName.value = "";
     return;
   }
+  const list = proj.project_versions ?? [];
   if (
     !activeProjectVersionName.value ||
-    !proj.project_versions.some((v) => v.name === activeProjectVersionName.value)
+    !list.some((v) => v.name === activeProjectVersionName.value)
   ) {
-    activeProjectVersionName.value = proj.project_versions[0]?.name || "";
+    activeProjectVersionName.value = list[0]?.name || "";
   }
 }
 
@@ -404,9 +411,20 @@ async function addProject() {
   const name = `Project_${projects.value.length + 1}`;
   try {
     const project = await api.createProject(name);
+    if (!project || !project.id) {
+      console.error("[addProject] response missing id", project);
+      await loadProjects();
+      return;
+    }
+    if (!Array.isArray(project.project_versions)) {
+      project.project_versions = [];
+    }
     projects.value.push(project);
     activeProjectId.value = project.id;
-  } catch (e: any) { alert("添加项目失败: " + (e?.message || e)); }
+  } catch (e: any) {
+    console.error("[addProject] error", e);
+    alert("添加项目失败: " + (e?.message || e));
+  }
 }
 
 async function removeProject(id: string) {
@@ -879,7 +897,7 @@ onUnmounted(() => { ws?.close(); });
     <!-- L2 Tabs: project versions -->
     <div v-if="activeProject" class="tab-bar tab-bar-l2">
       <div
-        v-for="pv in activeProject.project_versions"
+        v-for="pv in (activeProject.project_versions ?? [])"
         :key="pv.name"
         class="tab tab-l2"
         :class="{ active: activeProjectVersionName === pv.name }"

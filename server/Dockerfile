@@ -10,6 +10,7 @@ RUN npm run build
 FROM rust:1.90-bookworm AS server-builder
 WORKDIR /app
 COPY server/Cargo.toml server/Cargo.lock* ./server/
+COPY server/build.rs ./server/
 COPY server/src/ ./server/src/
 COPY --from=web-builder /app/web-admin/dist ./web-admin/dist
 WORKDIR /app/server

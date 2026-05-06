@@ -1012,14 +1012,38 @@ body {
 
 /* ========== Resize Handle ========== */
 .resize-handle {
-  height: 4px;
+  height: 6px;
+  margin-top: -3px;
+  margin-bottom: -3px;
   background: transparent;
   cursor: ns-resize;
   transition: background 0.2s;
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.resize-handle::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 28px;
+  height: 2px;
+  background: var(--border-light);
+  border-radius: 1px;
+  opacity: 0.5;
+  transition: opacity 0.2s, background 0.2s;
 }
 
 .resize-handle:hover {
   background: var(--accent-dim);
+}
+
+.resize-handle:hover::before {
+  opacity: 1;
+  background: var(--accent);
 }
 
 /* ========== Loading Spinner ========== */
