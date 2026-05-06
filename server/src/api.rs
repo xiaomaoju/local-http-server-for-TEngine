@@ -348,6 +348,9 @@ async fn get_version_manifest(
     let config = state.app_config.read().await;
     let project = config.projects.iter().find(|p| p.id == id)
         .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+    if !project.project_versions.iter().any(|v| v.name == pver) {
+        return Err((StatusCode::NOT_FOUND, "Project version not found".to_string()));
+    }
     let project_name = project.project_name.clone();
     drop(config);
     let storage = Storage::new(state.server_config.resources_dir());
@@ -369,6 +372,9 @@ async fn list_versions(
 ) -> Result<Json<Vec<crate::storage::VersionEntry>>, StatusCode> {
     let config = state.app_config.read().await;
     let project = config.projects.iter().find(|p| p.id == id).ok_or(StatusCode::NOT_FOUND)?;
+    if !project.project_versions.iter().any(|v| v.name == pver) {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let project_name = project.project_name.clone();
     drop(config);
     let platform = params.platform.unwrap_or_else(|| "Android".to_string());
@@ -387,21 +393,26 @@ async fn activate_version(
     axum::extract::Query(params): axum::extract::Query<ActivateQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let platform = params.platform.unwrap_or_else(|| "Android".to_string());
-    let mut config = state.app_config.write().await;
-    let project = config.projects.iter_mut().find(|p| p.id == id)
-        .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
-    let pv = project.project_versions.iter_mut().find(|v| v.name == pver)
-        .ok_or((StatusCode::NOT_FOUND, "Project version not found".to_string()))?;
-    let entry = pv
-        .platform_settings
-        .entry(platform.clone())
-        .or_insert_with(|| crate::config::PlatformSettings {
-            access_enabled: true,
-            active_bundle: None,
-        });
-    entry.active_bundle = Some(ver.clone());
-    config.save(&state.server_config.config_path())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    {
+        let mut config = state.app_config.write().await;
+        let project = config.projects.iter_mut().find(|p| p.id == id)
+            .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+        if !project.platforms.contains(&platform) {
+            return Err((StatusCode::NOT_FOUND, "Platform not declared on project".to_string()));
+        }
+        let pv = project.project_versions.iter_mut().find(|v| v.name == pver)
+            .ok_or((StatusCode::NOT_FOUND, "Project version not found".to_string()))?;
+        let entry = pv
+            .platform_settings
+            .entry(platform.clone())
+            .or_insert_with(|| crate::config::PlatformSettings {
+                access_enabled: true,
+                active_bundle: None,
+            });
+        entry.active_bundle = Some(ver.clone());
+        config.save(&state.server_config.config_path())
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    }
 
     ws::broadcast_log(&state, ws::make_log(
         "activate", 200, "PUT",
@@ -427,6 +438,9 @@ async fn delete_version(
     let config = state.app_config.read().await;
     let project = config.projects.iter().find(|p| p.id == id)
         .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+    if !project.project_versions.iter().any(|v| v.name == pver) {
+        return Err((StatusCode::NOT_FOUND, "Project version not found".to_string()));
+    }
     let project_name = project.project_name.clone();
     drop(config);
     let storage = Storage::new(state.server_config.resources_dir());
@@ -464,6 +478,9 @@ async fn list_files(
     let config = state.app_config.read().await;
     let project = config.projects.iter().find(|p| p.id == id)
         .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+    if !project.project_versions.iter().any(|v| v.name == pver) {
+        return Err((StatusCode::NOT_FOUND, "Project version not found".to_string()));
+    }
     let project_name = project.project_name.clone();
     drop(config);
     let platform = params.platform.unwrap_or_else(|| "Android".to_string());
@@ -534,25 +551,27 @@ async fn delete_project_version(
     State(state): State<Arc<AppState>>,
     Path((id, pver)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let mut config = state.app_config.write().await;
-    let project = config
-        .projects
-        .iter_mut()
-        .find(|p| p.id == id)
-        .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
-    let project_name = project.project_name.clone();
-    let before = project.project_versions.len();
-    project.project_versions.retain(|v| v.name != pver);
-    if project.project_versions.len() == before {
-        return Err((StatusCode::NOT_FOUND, "Project version not found".to_string()));
-    }
-    config
-        .save(&state.server_config.config_path())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let project_name = {
+        let mut config = state.app_config.write().await;
+        let project = config
+            .projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+        let project_name = project.project_name.clone();
+        let before = project.project_versions.len();
+        project.project_versions.retain(|v| v.name != pver);
+        if project.project_versions.len() == before {
+            return Err((StatusCode::NOT_FOUND, "Project version not found".to_string()));
+        }
+        config
+            .save(&state.server_config.config_path())
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        project_name
+    };
+    // Lock dropped. Disk delete is best-effort (matches delete_project pattern).
     let storage = Storage::new(state.server_config.resources_dir());
-    storage
-        .delete_project_version(&project_name, &pver)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let _ = storage.delete_project_version(&project_name, &pver);
     Ok(StatusCode::OK)
 }
 
@@ -572,6 +591,9 @@ async fn set_platform_access(
         .iter_mut()
         .find(|p| p.id == id)
         .ok_or((StatusCode::NOT_FOUND, "Project not found".to_string()))?;
+    if !project.platforms.contains(&plat) {
+        return Err((StatusCode::NOT_FOUND, "Platform not declared on project".to_string()));
+    }
     let pv = project
         .project_versions
         .iter_mut()
