@@ -18,7 +18,7 @@ async function viewFile(fileName: string) {
     console.error("Failed to open URL:", e);
   }
 }
-import { api, type ProjectConfig, type VersionEntry, type LogEntry, type FileEntry, type FileManifestEntry } from "../api/remote";
+import { api, type ProjectConfig, type VersionEntry, type LogEntry, type FileEntry, type FileManifestEntry, type LogStreamConnection } from "../api/remote";
 
 interface LocalVersionEntry {
   version: string;
@@ -128,7 +128,8 @@ const versions = ref<VersionEntry[]>([]);
 const logs = ref<LogEntry[]>([]);
 const uploading = ref(false);
 const selectedPlatform = ref("Android");
-let ws: WebSocket | null = null;
+let logStream: LogStreamConnection | null = null;
+let logStreamClosed = false;
 
 // Per-project local bundles dir (key: serverUrl__projectId)
 const bundlesDirMap = ref<Record<string, string>>({});
@@ -303,6 +304,7 @@ async function handleLogin() {
       persistCurrentConnection();
       connected.value = true;
       await loadProjects();
+      logStreamClosed = false;
       connectWebSocket();
     } else {
       loginError.value = "密码错误";
@@ -327,25 +329,37 @@ onMounted(() => {
 });
 
 function disconnect() {
-  ws?.close();
+  logStreamClosed = true;
+  logStream?.close();
+  logStream = null;
   api.logout();
   connected.value = false;
   projects.value = [];
   logs.value = [];
 }
 
-function connectWebSocket() {
-  ws = api.connectLogs(
-    (log) => {
-      logs.value.push(log);
-      if (logs.value.length > 2000) logs.value = logs.value.slice(-1500);
-      nextTick(() => {
-        const el = document.querySelector(".log-body");
-        if (el) el.scrollTop = el.scrollHeight;
-      });
-    },
-    () => setTimeout(connectWebSocket, 3000),
-  );
+async function connectWebSocket() {
+  if (logStreamClosed) return;
+  try {
+    const stream = await api.connectLogs(
+      (log) => {
+        logs.value.push(log);
+        if (logs.value.length > 2000) logs.value = logs.value.slice(-1500);
+        nextTick(() => {
+          const el = document.querySelector(".log-body");
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      },
+      () => {
+        // Server closed the connection — try to reconnect
+        if (!logStreamClosed) setTimeout(connectWebSocket, 3000);
+      },
+    );
+    logStream = stream;
+  } catch (e) {
+    console.error("[Log stream] connect failed", e);
+    if (!logStreamClosed) setTimeout(connectWebSocket, 3000);
+  }
 }
 
 async function loadProjects() {
@@ -662,7 +676,10 @@ function onResizeEnd() {
   document.removeEventListener("mouseup", onResizeEnd);
 }
 
-onUnmounted(() => { ws?.close(); });
+onUnmounted(() => {
+  logStreamClosed = true;
+  logStream?.close();
+});
 </script>
 
 <template>

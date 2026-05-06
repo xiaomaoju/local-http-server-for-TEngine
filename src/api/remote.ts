@@ -1,5 +1,10 @@
 import { sha256 } from "js-sha256";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import TauriWebSocket from "@tauri-apps/plugin-websocket";
+
+export interface LogStreamConnection {
+  close: () => Promise<void>;
+}
 
 async function sha256Hex(input: string): Promise<string> {
   if (typeof crypto !== "undefined" && crypto.subtle) {
@@ -207,20 +212,37 @@ class RemoteApi {
     return this.request(`/api/projects/${projectId}/files?${params.toString()}`);
   }
 
-  connectLogs(onMessage: (log: LogEntry) => void, onError?: (err: Event) => void): WebSocket {
+  async connectLogs(
+    onMessage: (log: LogEntry) => void,
+    onClose?: () => void,
+  ): Promise<LogStreamConnection> {
     const wsProtocol = this.baseUrl.startsWith("https") ? "wss" : "ws";
     const wsHost = this.baseUrl.replace(/^https?:\/\//, "");
     const url = `${wsProtocol}://${wsHost}/api/ws/logs?token=${this.token}`;
 
-    const ws = new WebSocket(url);
-    ws.onmessage = (event) => {
-      try {
-        const log: LogEntry = JSON.parse(event.data);
-        onMessage(log);
-      } catch {}
+    const ws = await TauriWebSocket.connect(url);
+    let closed = false;
+    ws.addListener((msg) => {
+      if (closed) return;
+      if (msg.type === "Text" && typeof msg.data === "string") {
+        try {
+          const log: LogEntry = JSON.parse(msg.data);
+          onMessage(log);
+        } catch {}
+      } else if (msg.type === "Close") {
+        closed = true;
+        onClose?.();
+      }
+    });
+    return {
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        try {
+          await ws.disconnect();
+        } catch {}
+      },
     };
-    ws.onerror = (e) => onError?.(e);
-    return ws;
   }
 }
 
