@@ -204,11 +204,14 @@ const savedPercent = computed(() => {
   return Math.round((savedBytes.value / diff.value.totalLocalSize) * 100);
 });
 
+let diffGeneration = 0;
+
 async function computeDiff() {
   const project = activeProject.value;
   if (!project || !syncDialog.value.selectedVersion) return;
   if (!canIncremental.value) return;
 
+  const gen = ++diffGeneration;
   const baseVersion = baseVersionForIncremental.value;
   const localVersion = syncDialog.value.selectedVersion;
 
@@ -227,6 +230,7 @@ async function computeDiff() {
       }),
       api.getVersionManifest(project.id, activeProjectVersionName.value, selectedPlatform.value, baseVersion),
     ]);
+    if (gen !== diffGeneration) return;  // stale, discard
 
     const remoteMap = new Map(remote.map((f) => [f.name, f]));
     const localMap = new Map(local.map((f) => [f.name, f]));
@@ -265,9 +269,12 @@ async function computeDiff() {
       uploadSize,
     };
   } catch (e: any) {
+    if (gen !== diffGeneration) return;  // stale, discard
     diffError.value = `计算差异失败: ${e?.message || e}`;
   } finally {
-    diffLoading.value = false;
+    if (gen === diffGeneration) {
+      diffLoading.value = false;
+    }
   }
 }
 
@@ -384,8 +391,9 @@ function syncActiveProjectVersion() {
 }
 
 watch(() => activeProjectId.value, () => {
+  showCreateProjectVersion.value = false;
+  newProjectVersionName.value = "";
   syncActiveProjectVersion();
-  if (activeProjectVersion.value) loadVersions();
 });
 
 watch(() => activeProjectVersionName.value, () => {
@@ -398,7 +406,7 @@ async function addProject() {
     const project = await api.createProject(name);
     projects.value.push(project);
     activeProjectId.value = project.id;
-  } catch {}
+  } catch (e: any) { alert("添加项目失败: " + (e?.message || e)); }
 }
 
 async function removeProject(id: string) {
@@ -407,7 +415,7 @@ async function removeProject(id: string) {
     await api.deleteProject(id);
     projects.value = projects.value.filter((p) => p.id !== id);
     if (activeProjectId.value === id) activeProjectId.value = projects.value[0]?.id || "";
-  } catch {}
+  } catch (e: any) { alert("删除项目失败: " + (e?.message || e)); }
 }
 
 async function saveProject() {
@@ -417,10 +425,22 @@ async function saveProject() {
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
-watch(() => activeProject.value, () => {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => saveProject(), 500);
-}, { deep: true });
+watch(
+  () => {
+    const p = activeProject.value;
+    if (!p) return null;
+    return {
+      project_name: p.project_name,
+      package_name: p.package_name,
+      platforms: [...p.platforms],
+    };
+  },
+  () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveProject(), 500);
+  },
+  { deep: true }
+);
 
 async function loadVersions() {
   const project = activeProject.value;
@@ -628,7 +648,7 @@ async function activateVersion(version: string) {
       settings.active_bundle = version;
       pv.platform_settings[selectedPlatform.value] = settings;
     }
-  } catch {}
+  } catch (e: any) { alert("激活失败: " + (e?.message || e)); }
 }
 
 async function deleteVersion(version: string) {
@@ -638,7 +658,7 @@ async function deleteVersion(version: string) {
   try {
     await api.deleteVersion(project.id, pvName, version, selectedPlatform.value);
     await loadVersions();
-  } catch {}
+  } catch (e: any) { alert("删除版本失败: " + (e?.message || e)); }
 }
 
 async function createProjectVersion() {
@@ -958,7 +978,7 @@ onUnmounted(() => { ws?.close(); });
             class="server-url"
             style="margin-left:auto;"
           >
-            当前激活: <strong>{{ activeProjectVersion.platform_settings[selectedPlatform].active_bundle }}</strong>
+            当前激活: <strong>{{ activeProjectVersion.platform_settings[selectedPlatform]?.active_bundle }}</strong>
           </div>
         </div>
 
