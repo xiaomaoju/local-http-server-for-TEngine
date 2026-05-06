@@ -928,24 +928,28 @@ onUnmounted(() => { ws?.close(); });
 
         <!-- Foldable project settings -->
         <div class="rm-foldable">
-          <div class="rm-fold-head" @click="projectSettingsExpanded = !projectSettingsExpanded">
+          <button
+            type="button"
+            class="rm-fold-head"
+            @click.stop="projectSettingsExpanded = !projectSettingsExpanded"
+          >
             <span class="rm-fold-arrow" :class="{ open: projectSettingsExpanded }">▶</span>
-            <span>项目设置</span>
+            <span class="rm-fold-title">项目设置</span>
             <span class="rm-fold-meta">{{ activeProject.project_name }} · {{ activeProject.platforms.join(', ') }}</span>
-          </div>
+          </button>
           <div v-if="projectSettingsExpanded" class="rm-fold-body">
-            <div class="config-row">
-              <div class="config-field"><label>项目名称</label><input v-model="activeProject.project_name" /></div>
-              <div class="config-field"><label>包名</label><input v-model="activeProject.package_name" /></div>
+            <div class="rm-inline-row">
+              <label class="rm-inline-label">项目名</label>
+              <input v-model="activeProject.project_name" class="rm-inline-input" />
+              <label class="rm-inline-label">包名</label>
+              <input v-model="activeProject.package_name" class="rm-inline-input" />
             </div>
-            <div class="config-row">
-              <div class="config-field config-platforms-field">
-                <label>平台</label>
-                <div class="platform-tags">
-                  <span v-for="p in AVAILABLE_PLATFORMS" :key="p" class="platform-tag"
-                    :class="{ selected: activeProject.platforms.includes(p) }"
-                    @click="togglePlatform(p)">{{ p }}</span>
-                </div>
+            <div class="rm-inline-row">
+              <label class="rm-inline-label">平台</label>
+              <div class="platform-tags" style="flex:1">
+                <span v-for="p in AVAILABLE_PLATFORMS" :key="p" class="platform-tag"
+                  :class="{ selected: activeProject.platforms.includes(p) }"
+                  @click="togglePlatform(p)">{{ p }}</span>
               </div>
             </div>
           </div>
@@ -967,37 +971,28 @@ onUnmounted(() => { ws?.close(); });
           </span>
         </div>
 
-        <!-- Bundles dir -->
-        <div class="config-row">
-          <div class="config-field" style="flex:1">
-            <label>BUNDLES 目录</label>
-            <div style="display:flex;gap:8px;">
-              <input :value="currentBundlesDir" readonly placeholder="选择本地 Bundles 目录..." style="flex:1;cursor:pointer" @click="selectBundlesDir" />
-              <button class="btn btn-secondary" @click="selectBundlesDir">浏览</button>
-            </div>
-          </div>
+        <!-- Bundles dir (compact inline) -->
+        <div class="rm-inline-row">
+          <label class="rm-inline-label">Bundles</label>
+          <input :value="currentBundlesDir" readonly placeholder="选择本地 Bundles 目录..." class="rm-inline-input" style="flex:1;cursor:pointer" @click="selectBundlesDir" />
+          <button class="btn btn-secondary rm-inline-btn" @click="selectBundlesDir">浏览</button>
         </div>
 
-        <!-- Sync controls -->
-        <div class="control-bar">
-          <div class="config-field" style="width:140px">
-            <label>同步平台</label>
-            <select v-model="selectedPlatform" @change="loadVersions" style="width:100%;padding:4px 8px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:4px;">
-              <option v-for="p in activeProject.platforms" :key="p" :value="p">{{ p }}</option>
-            </select>
-          </div>
-          <div style="display:flex;align-items:flex-end;">
-            <button class="btn btn-primary" @click="startSync" :disabled="uploading || !currentBundlesDir">
-              {{ uploading ? "上传中..." : "▶ 同步资源" }}
-            </button>
-          </div>
-          <div
+        <!-- Sync controls (compact inline) -->
+        <div class="rm-inline-row">
+          <label class="rm-inline-label">同步</label>
+          <select v-model="selectedPlatform" @change="loadVersions" class="rm-inline-select">
+            <option v-for="p in activeProject.platforms" :key="p" :value="p">{{ p }}</option>
+          </select>
+          <button class="btn btn-primary rm-inline-btn" @click="startSync" :disabled="uploading || !currentBundlesDir">
+            {{ uploading ? "上传中..." : "▶ 同步资源" }}
+          </button>
+          <span
             v-if="activeProjectVersion.platform_settings[selectedPlatform]?.active_bundle"
-            class="server-url"
-            style="margin-left:auto;"
+            class="rm-active-pill"
           >
-            当前激活: <strong>{{ activeProjectVersion.platform_settings[selectedPlatform]?.active_bundle }}</strong>
-          </div>
+            激活 <strong>{{ activeProjectVersion.platform_settings[selectedPlatform]?.active_bundle }}</strong>
+          </span>
         </div>
 
         <!-- Versions -->
@@ -2243,14 +2238,21 @@ onUnmounted(() => { ws?.close(); });
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   cursor: pointer;
   background: var(--bg-tertiary);
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
+  width: 100%;
+  border: none;
+  text-align: left;
+  font-family: inherit;
+  outline: none;
 }
 .rm-fold-head:hover { background: var(--bg-secondary); }
+.rm-fold-head > * { pointer-events: none; }
+.rm-fold-title { flex-shrink: 0; }
 .rm-fold-arrow {
   display: inline-block;
   font-size: 9px;
@@ -2264,17 +2266,84 @@ onUnmounted(() => { ws?.close(); });
   color: var(--text-muted);
   font-size: 11px;
 }
-.rm-fold-body { padding: 10px 12px; }
+.rm-fold-body { padding: 8px 12px; }
+
+/* Compact inline rows */
+.rm-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  flex-wrap: nowrap;
+}
+.rm-inline-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
+  min-width: 50px;
+}
+.rm-inline-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+}
+.rm-inline-input:focus { border-color: var(--accent); }
+.rm-inline-select {
+  height: 28px;
+  padding: 0 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+  flex-shrink: 0;
+  min-width: 100px;
+}
+.rm-inline-btn {
+  height: 28px;
+  padding: 0 14px !important;
+  font-size: 12px !important;
+  flex-shrink: 0;
+}
+.rm-active-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.rm-active-pill strong {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+}
 
 .rm-access-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 4px 10px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  margin: 8px 0;
+  border-radius: 6px;
+  margin: 6px 0;
   flex-wrap: wrap;
 }
 .rm-access-label {
