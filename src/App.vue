@@ -4,6 +4,7 @@ import LocalMode from "./components/LocalMode.vue";
 import RemoteMode from "./components/RemoteMode.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import HelpModal from "./components/HelpModal.vue";
+import { version as PKG_VERSION } from "../package.json";
 
 const mode = ref<"local" | "remote">("local");
 const LocalModeRef = shallowRef(LocalMode);
@@ -11,7 +12,7 @@ const RemoteModeRef = shallowRef(RemoteMode);
 const currentMode = computed(() => mode.value === "local" ? LocalModeRef.value : RemoteModeRef.value);
 const showSettings = ref(false);
 const showHelp = ref(false);
-const APP_VERSION = "v1.0.2";
+const APP_VERSION = `v${PKG_VERSION}`;
 </script>
 
 <template>

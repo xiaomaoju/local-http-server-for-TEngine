@@ -1,13 +1,15 @@
 {
   "name": "tengine-http",
   "private": true,
-  "version": "1.0.2",
+  "version": "0.0.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "sync-version": "node scripts/sync-version.mjs",
+    "version": "node scripts/sync-version.mjs && git add server/Cargo.toml src-tauri/Cargo.toml src-tauri/tauri.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
