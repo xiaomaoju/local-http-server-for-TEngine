@@ -955,26 +955,24 @@ onUnmounted(() => { ws?.close(); });
           </div>
         </div>
 
-        <!-- Platform access toggle row -->
-        <div class="rm-access-row">
-          <span class="rm-access-label">平台访问</span>
-          <span
-            v-for="p in activeProject.platforms"
-            :key="p"
-            class="rm-access-chip"
-            :class="{ on: activeProjectVersion.platform_settings[p]?.access_enabled }"
-            @click="togglePlatformAccess(p)"
-            :title="`${p} 访问 ${activeProjectVersion.platform_settings[p]?.access_enabled ? '已开启' : '已关闭'}`"
-          >
-            <span class="rm-access-dot"></span>
-            {{ p }}
-          </span>
-        </div>
-
-        <!-- Bundles dir (compact inline) -->
-        <div class="rm-inline-row">
-          <label class="rm-inline-label">Bundles</label>
-          <input :value="currentBundlesDir" readonly placeholder="选择本地 Bundles 目录..." class="rm-inline-input" style="flex:1;cursor:pointer" @click="selectBundlesDir" />
+        <!-- Platform access + Bundles dir (combined compact row) -->
+        <div class="rm-combo-row">
+          <div class="rm-access-cluster">
+            <span class="rm-access-label">平台访问</span>
+            <span
+              v-for="p in activeProject.platforms"
+              :key="p"
+              class="rm-access-chip"
+              :class="{ on: activeProjectVersion.platform_settings[p]?.access_enabled }"
+              @click="togglePlatformAccess(p)"
+              :title="`${p} 访问 ${activeProjectVersion.platform_settings[p]?.access_enabled ? '已开启' : '已关闭'}`"
+            >
+              <span class="rm-access-dot"></span>
+              {{ p }}
+            </span>
+          </div>
+          <label class="rm-inline-label rm-bundles-label">Bundles</label>
+          <input :value="currentBundlesDir" readonly placeholder="选择本地 Bundles 目录..." class="rm-inline-input rm-bundles-input" @click="selectBundlesDir" />
           <button class="btn btn-secondary rm-inline-btn" @click="selectBundlesDir">浏览</button>
         </div>
 
@@ -2345,6 +2343,38 @@ onUnmounted(() => { ws?.close(); });
   border-radius: 6px;
   margin: 6px 0;
   flex-wrap: wrap;
+}
+
+/* Combo row: access chips left + bundles dir right */
+.rm-combo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 6px 0;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.rm-access-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.rm-bundles-label {
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+  margin-left: 4px;
+  min-width: auto !important;
+}
+.rm-bundles-input {
+  flex: 1;
+  min-width: 80px;
+  cursor: pointer;
+  background: var(--bg-secondary) !important;
 }
 .rm-access-label {
   font-size: 11px;
