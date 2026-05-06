@@ -70,10 +70,10 @@ impl Storage {
         file_name: &str,
         data: &[u8],
     ) -> Result<(), String> {
-        sanitize_path_component(file_name)?;
+        let safe_name = sanitize_path_component(file_name)?;
         let dir = self.version_dir(project_name, project_version, platform, version)?;
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create version dir: {}", e))?;
-        let path = dir.join(file_name);
+        let path = dir.join(safe_name);
         fs::write(&path, data).map_err(|e| format!("Failed to write file: {}", e))?;
         Ok(())
     }
@@ -222,12 +222,12 @@ impl Storage {
         fs::create_dir_all(&new_dir).map_err(|e| format!("创建版本目录失败: {}", e))?;
         let mut count = 0u32;
         for name in copy_files {
-            sanitize_path_component(name)?;
-            let src = base_dir.join(name);
+            let safe_name = sanitize_path_component(name)?;
+            let src = base_dir.join(safe_name);
             if !src.exists() {
                 return Err(format!("基础版本中不存在文件: {}", name));
             }
-            let dst = new_dir.join(name);
+            let dst = new_dir.join(safe_name);
             fs::copy(&src, &dst).map_err(|e| format!("复制文件 {} 失败: {}", name, e))?;
             count += 1;
         }
