@@ -19,8 +19,15 @@ pub struct ProjectConfig {
     pub cors_enabled: bool,
     /// 包名 (YooAsset package name, 如 DefaultPackage)
     pub package_name: String,
+    /// 项目版本号，用于 URL 路径（如 v1, v2）
+    #[serde(default = "default_project_version")]
+    pub project_version: String,
     #[serde(default)]
     pub platform_access: std::collections::HashMap<String, bool>,
+}
+
+fn default_project_version() -> String {
+    "v1".to_string()
 }
 
 impl Default for ProjectConfig {
@@ -35,6 +42,7 @@ impl Default for ProjectConfig {
             platforms: vec!["Android".to_string()],
             cors_enabled: true,
             package_name: "DefaultPackage".to_string(),
+            project_version: default_project_version(),
             platform_access,
         }
     }

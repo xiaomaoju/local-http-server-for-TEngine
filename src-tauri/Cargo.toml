@@ -1,6 +1,6 @@
 [package]
 name = "tengine-http-server"
-version = "0.0.3"
+version = "0.0.4"
 description = "TEngine Local Asset Server with GUI"
 authors = ["you"]
 edition = "2021"

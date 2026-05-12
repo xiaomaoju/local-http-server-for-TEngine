@@ -97,7 +97,7 @@ async fn start_server(
 
     // 设置 server root 符号链接
     let server_root =
-        sync::setup_server_root(&project.bundles_dir, &project.project_name)?;
+        sync::setup_server_root(&project.bundles_dir, &project.project_name, &project.project_version)?;
 
     // 创建日志通道
     let (log_tx, mut log_rx) = tokio::sync::mpsc::channel::<LogEntry>(256);
@@ -125,7 +125,7 @@ async fn start_server(
     )
     .await?;
 
-    let url = format!("http://127.0.0.1:{}/{}/", running.port, project.project_name);
+    let url = format!("http://127.0.0.1:{}/{}/{}/", running.port, project.project_version, project.project_name);
 
     let mut servers = state.servers.lock().await;
     servers.insert(project_id, running);

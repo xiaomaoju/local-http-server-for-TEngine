@@ -47,6 +47,7 @@
 - **文件浏览** — 浏览每个版本的具体文件，激活版本可复制 URL 或直接预览内容
 - **WebSocket 日志推送** — 远端所有请求实时推到客户端，走 Tauri 原生 ws 避免 webview CORS
 - **认证 / 安全** — 客户端 SHA-256 + 服务端 Argon2 + JWT；上传 / 删除等操作严格路径校验
+- **可选 HTTPS** — 通过环境变量传入 TLS 证书，HTTP / HTTPS 双端口同时监听；前端可运行时开关协议访问
 
 ---
 
@@ -98,7 +99,7 @@ docker load < tengine-server.tar.gz
 docker compose -f docker-compose.offline.yml up -d
 ```
 
-部署后访问 `http://<服务器IP>:8082`。更新镜像必须 `docker compose down && docker compose up -d --build`，restart 不会换镜像。
+部署后访问 `http://<服务器IP>:8082`。若配置了 TLS 证书，HTTPS 同时监听 `8182`。更新镜像必须 `docker compose down && docker compose up -d --build`，restart 不会换镜像。
 
 ### 环境变量
 
@@ -109,11 +110,14 @@ docker compose -f docker-compose.offline.yml up -d
 | `PORT` | ❌ | `8082` | 监听端口 |
 | `DATA_DIR` | ❌ | `/data` | 数据目录 |
 | `TOKEN_EXPIRE_HOURS` | ❌ | `24` | JWT 过期时间 |
+| `TLS_CERT` | ❌ | — | TLS 证书路径（PEM），提供后启用 HTTPS |
+| `TLS_KEY` | ❌ | — | TLS 私钥路径（PEM） |
+| `HTTPS_PORT` | ❌ | `8182` | HTTPS 监听端口 |
 
 ### 升级版本
 
 ```bash
-npm version 0.0.4    # 自动同步到 4 个文件 + 提交 + 打 tag
+npm version 0.0.5    # 自动同步到 4 个文件 + 提交 + 打 tag
 ```
 
 ---
@@ -133,7 +137,7 @@ npm version 0.0.4    # 自动同步到 4 个文件 + 提交 + 打 tag
 2. **客户端登录** — 填地址 + 密码连接
 3. **建项目 / 项目版本** — 一级标签建项目（RiftGuard...），二级标签建项目版本（v1 / v2 ...）
 4. **同步上传** — 选 Bundles 目录 + 平台 + 版本，点「同步资源」自动上传到当前选中的项目版本并激活
-5. **接入** — Unity 用 `http://<服务器>:<端口>/res/{项目版本}/{项目名}/{平台}/`，例：`http://10.0.0.1:8082/res/v1/RiftGuard/Android/`
+5. **接入** — Unity 用 `http(s)://<服务器>:<端口>/res/{项目版本}/{项目名}/{平台}/`，例：`http://10.0.0.1:8082/res/v1/RiftGuard/Android/`
 
 ---
 
@@ -149,6 +153,8 @@ npm version 0.0.4    # 自动同步到 4 个文件 + 提交 + 打 tag
 | GET | `/res/...` | 资源下载 |
 | GET | `/api/health` | 健康检查 |
 | POST | `/api/auth/login` | 登录获取 JWT |
+| GET | `/api/settings/protocol-access` | 查询协议开关状态 |
+| PUT | `/api/settings/protocol-access` | 设置 HTTP/HTTPS 开关（JWT） |
 
 ### 管理（JWT 保护）
 
@@ -207,7 +213,7 @@ TEngineHttp/
 - 担心带宽被滥用，建议配合 Cloudflare 防盗链 / 速率限制
 - 上传 / 删除 / 重命名等操作严格做路径遍历防护
 - 上传单次大小限制 512MB（`server/src/api.rs` 可调）
-- **生产环境强烈建议** HTTPS：Nginx / Caddy 反代 + Let's Encrypt
+- **原生 HTTPS** — 设置 `TLS_CERT` + `TLS_KEY` 即可启用，无需额外反代；也可继续用 Nginx / Caddy 反代
 
 ---
 

@@ -272,9 +272,8 @@ impl ResourceSyncer {
 }
 
 /// 设置服务根目录的符号链接
-/// 对应 start.bat 中的:
-/// mklink /J "%SERVER_ROOT%\%PROJECT_NAME%" "%BUNDLES_DIR%"
-pub fn setup_server_root(bundles_dir: &str, project_name: &str) -> Result<PathBuf, String> {
+/// 路径结构: _server_root/{project_version}/{project_name} -> {bundles_dir}
+pub fn setup_server_root(bundles_dir: &str, project_name: &str, project_version: &str) -> Result<PathBuf, String> {
     let bundles_path = PathBuf::from(bundles_dir);
     if !bundles_path.exists() {
         return Err(format!("Bundles 目录不存在: {}", bundles_dir));
@@ -286,9 +285,11 @@ pub fn setup_server_root(bundles_dir: &str, project_name: &str) -> Result<PathBu
     if server_root.exists() {
         fs::remove_dir_all(&server_root).map_err(|e| format!("清理 _server_root 失败: {}", e))?;
     }
-    fs::create_dir_all(&server_root).map_err(|e| format!("创建 _server_root 失败: {}", e))?;
 
-    let link_path = server_root.join(project_name);
+    let version_dir = server_root.join(project_version);
+    fs::create_dir_all(&version_dir).map_err(|e| format!("创建 _server_root 失败: {}", e))?;
+
+    let link_path = version_dir.join(project_name);
 
     // 创建符号链接/Junction
     create_symlink(&bundles_path, &link_path)?;

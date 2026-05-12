@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { api, type ProjectConfig, type VersionEntry, type LogEntry, type FileEntry } from "../api/remote";
 import LogPanel from "./LogPanel.vue";
 import SettingsDialog from "./SettingsDialog.vue";
@@ -7,11 +7,12 @@ import HelpModal from "./HelpModal.vue";
 
 const emit = defineEmits<{ (e: "logout"): void }>();
 
-const APP_VERSION = "v1.0.1";
+const APP_VERSION = "v1.0.2";
 const VIEWABLE_EXTS = ["version", "hash", "report", "json", "txt", "log", "xml", "yaml", "yml", "csv"];
 
 const projects = ref<ProjectConfig[]>([]);
 const activeProjectId = ref("");
+const activeProjectVersionName = ref("");
 const versions = ref<VersionEntry[]>([]);
 const logs = ref<LogEntry[]>([]);
 const uploading = ref(false);
@@ -45,6 +46,23 @@ const activeProject = computed(() =>
   projects.value.find((p) => p.id === activeProjectId.value)
 );
 
+const activeProjectVersion = computed(() =>
+  activeProject.value?.project_versions.find((v) => v.name === activeProjectVersionName.value)
+);
+
+const activeBundleForPlatform = computed(() => {
+  const pv = activeProjectVersion.value;
+  if (!pv) return "";
+  return pv.platform_settings[selectedPlatform.value]?.active_bundle || "";
+});
+
+const platformAccessEnabled = computed(() => {
+  const pv = activeProjectVersion.value;
+  if (!pv) return true;
+  const settings = pv.platform_settings[selectedPlatform.value];
+  return settings ? settings.access_enabled : true;
+});
+
 onMounted(async () => {
   await loadProjects();
   connectWebSocket();
@@ -55,17 +73,19 @@ onUnmounted(() => {
 });
 
 function connectWebSocket() {
-  ws = api.connectLogs(
-    (log) => {
-      logs.value.push(log);
-      if (logs.value.length > 2000) {
-        logs.value = logs.value.slice(-1500);
+  try {
+    ws = api.connectLogs(
+      (log) => {
+        logs.value.push(log);
+        if (logs.value.length > 2000) {
+          logs.value = logs.value.slice(-1500);
+        }
+      },
+      () => {
+        setTimeout(connectWebSocket, 3000);
       }
-    },
-    () => {
-      setTimeout(connectWebSocket, 3000);
-    }
-  );
+    );
+  } catch {}
 }
 
 async function loadProjects() {
@@ -73,6 +93,10 @@ async function loadProjects() {
     projects.value = await api.listProjects();
     if (projects.value.length > 0 && !activeProjectId.value) {
       activeProjectId.value = projects.value[0].id;
+      const proj = projects.value[0];
+      if (proj.project_versions.length > 0) {
+        activeProjectVersionName.value = proj.project_versions[0].name;
+      }
       await loadVersions();
     }
   } catch (e: any) {
@@ -86,6 +110,8 @@ async function addProject() {
     const project = await api.createProject(name);
     projects.value.push(project);
     activeProjectId.value = project.id;
+    activeProjectVersionName.value = "";
+    versions.value = [];
   } catch {}
 }
 
@@ -97,6 +123,9 @@ async function removeProject(id: string) {
     projects.value = projects.value.filter((p) => p.id !== id);
     if (activeProjectId.value === id) {
       activeProjectId.value = projects.value[0]?.id || "";
+      const proj = projects.value[0];
+      activeProjectVersionName.value = proj?.project_versions[0]?.name || "";
+      await loadVersions();
     }
   } catch {}
 }
@@ -111,9 +140,13 @@ async function saveProject() {
 
 async function loadVersions() {
   const project = activeProject.value;
-  if (!project) return;
+  const pver = activeProjectVersionName.value;
+  if (!project || !pver) {
+    versions.value = [];
+    return;
+  }
   try {
-    versions.value = await api.listVersions(project.id, selectedPlatform.value);
+    versions.value = await api.listVersions(project.id, pver, selectedPlatform.value);
   } catch {
     versions.value = [];
   }
@@ -122,12 +155,13 @@ async function loadVersions() {
 async function handleUpload(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = Array.from(input.files || []);
-  if (!files.length || !activeProject.value) return;
+  if (!files.length || !activeProject.value || !activeProjectVersionName.value) return;
 
   uploading.value = true;
   try {
     await api.uploadResources(
       activeProject.value.id,
+      activeProjectVersionName.value,
       selectedPlatform.value,
       uploadVersion.value,
       files,
@@ -142,19 +176,27 @@ async function handleUpload(event: Event) {
 
 async function activateVersion(version: string) {
   const project = activeProject.value;
-  if (!project) return;
+  const pver = activeProjectVersionName.value;
+  if (!project || !pver) return;
   try {
-    await api.activateVersion(project.id, version, selectedPlatform.value);
-    project.active_versions[selectedPlatform.value] = version;
+    await api.activateVersion(project.id, pver, version, selectedPlatform.value);
+    const pv = project.project_versions.find((v) => v.name === pver);
+    if (pv) {
+      if (!pv.platform_settings[selectedPlatform.value]) {
+        pv.platform_settings[selectedPlatform.value] = { access_enabled: true, active_bundle: null };
+      }
+      pv.platform_settings[selectedPlatform.value].active_bundle = version;
+    }
   } catch {}
 }
 
 async function deleteVersion(version: string) {
   const project = activeProject.value;
-  if (!project) return;
+  const pver = activeProjectVersionName.value;
+  if (!project || !pver) return;
   if (!confirm(`确定删除版本 ${version} 吗？`)) return;
   try {
-    await api.deleteVersion(project.id, version, selectedPlatform.value);
+    await api.deleteVersion(project.id, pver, version, selectedPlatform.value);
     await loadVersions();
   } catch {}
 }
@@ -169,6 +211,74 @@ function togglePlatform(platform: string) {
     project.platforms.push(platform);
   }
   saveProject();
+}
+
+async function togglePlatformAccess() {
+  const project = activeProject.value;
+  const pv = activeProjectVersion.value;
+  if (!project || !pv) return;
+  const current = platformAccessEnabled.value;
+  try {
+    await api.setPlatformAccess(project.id, pv.name, selectedPlatform.value, !current);
+    if (!pv.platform_settings[selectedPlatform.value]) {
+      pv.platform_settings[selectedPlatform.value] = { access_enabled: !current, active_bundle: null };
+    } else {
+      pv.platform_settings[selectedPlatform.value].access_enabled = !current;
+    }
+  } catch (e: any) {
+    alert(`操作失败: ${e?.message || e}`);
+  }
+}
+
+async function addProjectVersion() {
+  const project = activeProject.value;
+  if (!project) return;
+  const name = prompt("输入项目版本名称（如 v1.0、release 等）:");
+  if (!name || !name.trim()) return;
+  try {
+    const pv = await api.createProjectVersion(project.id, name.trim());
+    project.project_versions.push(pv);
+    activeProjectVersionName.value = pv.name;
+    await loadVersions();
+  } catch (e: any) {
+    alert(`创建失败: ${e?.message || e}`);
+  }
+}
+
+async function removeProjectVersion(pverName: string) {
+  const project = activeProject.value;
+  if (!project) return;
+  if (!confirm(`确定删除项目版本「${pverName}」吗？该版本下所有资源会一同删除。`)) return;
+  try {
+    await api.deleteProjectVersion(project.id, pverName);
+    project.project_versions = project.project_versions.filter((v) => v.name !== pverName);
+    if (activeProjectVersionName.value === pverName) {
+      activeProjectVersionName.value = project.project_versions[0]?.name || "";
+      await loadVersions();
+    }
+  } catch {}
+}
+
+async function renameProjectVersion(pverName: string) {
+  const project = activeProject.value;
+  if (!project) return;
+  const newName = prompt("输入新名称:", pverName);
+  if (!newName || !newName.trim() || newName.trim() === pverName) return;
+  try {
+    await api.renameProjectVersion(project.id, pverName, newName.trim());
+    const pv = project.project_versions.find((v) => v.name === pverName);
+    if (pv) pv.name = newName.trim();
+    if (activeProjectVersionName.value === pverName) {
+      activeProjectVersionName.value = newName.trim();
+    }
+  } catch (e: any) {
+    alert(`重命名失败: ${e?.message || e}`);
+  }
+}
+
+function selectProjectVersion(name: string) {
+  activeProjectVersionName.value = name;
+  loadVersions();
 }
 
 function formatSize(bytes: number): string {
@@ -195,11 +305,11 @@ const filteredLogs = computed(() => {
   return logs.value.filter((l) => l.project_id === activeProject.value?.project_name || l.project_id === activeProjectId.value);
 });
 
-// === File browser ===
 async function openFileBrowser(version: string) {
   const project = activeProject.value;
-  if (!project) return;
-  const isActive = project.active_versions[selectedPlatform.value] === version;
+  const pver = activeProjectVersionName.value;
+  if (!project || !pver) return;
+  const isActive = activeBundleForPlatform.value === version;
   fileBrowser.value = {
     show: true,
     version,
@@ -209,11 +319,7 @@ async function openFileBrowser(version: string) {
     error: "",
   };
   try {
-    const files = await api.listFiles(
-      project.id,
-      selectedPlatform.value,
-      isActive ? undefined : version,
-    );
+    const files = await api.listFiles(project.id, pver, selectedPlatform.value, version);
     fileBrowser.value.files = files;
   } catch (e: any) {
     fileBrowser.value.error = `加载失败: ${e?.message || e}`;
@@ -224,9 +330,10 @@ async function openFileBrowser(version: string) {
 
 function buildResourceUrl(fileName: string): string {
   const project = activeProject.value;
-  if (!project) return "";
+  const pver = activeProjectVersionName.value;
+  if (!project || !pver) return "";
   const origin = window.location.origin;
-  return `${origin}/res/${encodeURIComponent(project.project_name)}/${encodeURIComponent(selectedPlatform.value)}/${encodeURIComponent(fileName)}`;
+  return `${origin}/res/${encodeURIComponent(pver)}/${encodeURIComponent(project.project_name)}/${encodeURIComponent(selectedPlatform.value)}/${encodeURIComponent(fileName)}`;
 }
 
 async function copyToClipboard(text: string) {
@@ -253,6 +360,15 @@ function isViewable(fileName: string): boolean {
 function viewFile(fileName: string) {
   window.open(buildResourceUrl(fileName), "_blank");
 }
+
+watch(() => activeProjectId.value, () => {
+  const proj = activeProject.value;
+  if (proj && proj.project_versions.length > 0) {
+    activeProjectVersionName.value = proj.project_versions[0].name;
+  } else {
+    activeProjectVersionName.value = "";
+  }
+});
 </script>
 
 <template>
@@ -302,50 +418,84 @@ function viewFile(fileName: string) {
           </div>
         </div>
 
-        <div class="control-bar">
-          <div class="config-field" style="width:120px">
-            <label>上传平台</label>
-            <select v-model="selectedPlatform" @change="loadVersions" class="rm-select">
-              <option v-for="p in activeProject.platforms" :key="p" :value="p">{{ p }}</option>
-            </select>
-          </div>
-          <div class="config-field" style="width:140px">
-            <label>版本号（可选）</label>
-            <input v-model="uploadVersion" placeholder="留空自动生成" />
-          </div>
-          <div style="display:flex;align-items:flex-end;gap:8px;">
-            <label class="btn btn-primary" style="cursor:pointer;margin-bottom:0;">
-              选择文件上传
-              <input type="file" multiple style="display:none" @change="handleUpload" :disabled="uploading" />
-            </label>
-          </div>
-          <div v-if="uploading" style="color:var(--accent);font-size:12px;align-self:flex-end;">上传中...</div>
-          <div v-if="activeProject.active_versions[selectedPlatform]" class="server-url" style="margin-left:auto;">
-            当前激活: <strong>{{ activeProject.active_versions[selectedPlatform] }}</strong>
+        <!-- Project Versions bar -->
+        <div class="pver-bar">
+          <div class="pver-label">项目版本</div>
+          <div class="pver-tags">
+            <span v-for="pv in activeProject.project_versions" :key="pv.name"
+              class="pver-tag" :class="{ active: activeProjectVersionName === pv.name }"
+              @click="selectProjectVersion(pv.name)">
+              {{ pv.name }}
+              <button class="pver-action" @click.stop="renameProjectVersion(pv.name)" title="重命名">&#9998;</button>
+              <button class="pver-action pver-action-danger" @click.stop="removeProjectVersion(pv.name)" title="删除">&times;</button>
+            </span>
+            <button class="pver-add" @click="addProjectVersion" title="添加项目版本">+</button>
           </div>
         </div>
 
-        <div class="rm-versions-section">
-          <div class="rm-section-label">所有版本</div>
-          <div v-if="versions.length > 0" class="rm-versions-list">
-            <div v-for="entry in versions" :key="entry.version" class="rm-version-block">
-              <div class="rm-version-row" :class="{ current: activeProject.active_versions[selectedPlatform] === entry.version }">
-                <div class="rm-version-info">
-                  <div class="rm-version-name">
-                    {{ entry.version }}
-                    <span v-if="activeProject.active_versions[selectedPlatform] === entry.version" class="rm-active-badge">当前</span>
-                  </div>
-                  <div class="rm-version-meta">
-                    {{ entry.file_count }} 个文件 · {{ formatSize(entry.total_size) }} · {{ formatTime(entry.modified_timestamp) }}
-                  </div>
-                </div>
-                <button class="btn btn-secondary" style="font-size:11px;padding:2px 10px;" @click="openFileBrowser(entry.version)">浏览文件</button>
-                <button class="btn btn-primary" style="font-size:11px;padding:2px 10px;" @click="activateVersion(entry.version)">激活</button>
-                <button class="btn btn-danger" style="font-size:11px;padding:2px 10px;" @click="deleteVersion(entry.version)">删除</button>
-              </div>
+        <template v-if="activeProjectVersion">
+          <div class="control-bar">
+            <div class="config-field" style="width:120px">
+              <label>上传平台</label>
+              <select v-model="selectedPlatform" @change="loadVersions" class="rm-select">
+                <option v-for="p in activeProject.platforms" :key="p" :value="p">{{ p }}</option>
+              </select>
+            </div>
+            <div class="config-field" style="width:140px">
+              <label>版本号（可选）</label>
+              <input v-model="uploadVersion" placeholder="留空自动生成" />
+            </div>
+            <div style="display:flex;align-items:flex-end;gap:8px;">
+              <label class="btn btn-primary" style="cursor:pointer;margin-bottom:0;">
+                选择文件上传
+                <input type="file" multiple style="display:none" @change="handleUpload" :disabled="uploading" />
+              </label>
+            </div>
+            <div v-if="uploading" style="color:var(--accent);font-size:12px;align-self:flex-end;">上传中...</div>
+
+            <div class="access-toggle" style="margin-left:auto;">
+              <span class="access-label">平台访问</span>
+              <button
+                class="toggle-btn"
+                :class="{ on: platformAccessEnabled }"
+                @click="togglePlatformAccess"
+                :title="platformAccessEnabled ? '点击关闭该平台的访问' : '点击开启该平台的访问'"
+              >
+                <span class="toggle-track"><span class="toggle-thumb" /></span>
+              </button>
             </div>
           </div>
-          <div v-else style="color:var(--text-muted);font-size:13px;padding:12px 0;">暂无版本，请上传资源</div>
+
+          <div v-if="activeBundleForPlatform" class="active-info">
+            当前激活: <strong>{{ activeBundleForPlatform }}</strong>
+            <span v-if="!platformAccessEnabled" class="access-off-hint">(访问已关闭)</span>
+          </div>
+
+          <div class="rm-versions-section">
+            <div class="rm-section-label">所有版本</div>
+            <div v-if="versions.length > 0" class="rm-versions-list">
+              <div v-for="entry in versions" :key="entry.version" class="rm-version-block">
+                <div class="rm-version-row" :class="{ current: activeBundleForPlatform === entry.version }">
+                  <div class="rm-version-info">
+                    <div class="rm-version-name">
+                      {{ entry.version }}
+                      <span v-if="activeBundleForPlatform === entry.version" class="rm-active-badge">当前</span>
+                    </div>
+                    <div class="rm-version-meta">
+                      {{ entry.file_count }} 个文件 · {{ formatSize(entry.total_size) }} · {{ formatTime(entry.modified_timestamp) }}
+                    </div>
+                  </div>
+                  <button class="btn btn-secondary" style="font-size:11px;padding:2px 10px;" @click="openFileBrowser(entry.version)">浏览文件</button>
+                  <button class="btn btn-primary" style="font-size:11px;padding:2px 10px;" @click="activateVersion(entry.version)">激活</button>
+                  <button class="btn btn-danger" style="font-size:11px;padding:2px 10px;" @click="deleteVersion(entry.version)">删除</button>
+                </div>
+              </div>
+            </div>
+            <div v-else style="color:var(--text-muted);font-size:13px;padding:12px 0;">暂无版本，请上传资源</div>
+          </div>
+        </template>
+        <div v-else class="empty-pver">
+          {{ activeProject.project_versions.length === 0 ? '请先创建一个项目版本' : '请选择一个项目版本' }}
         </div>
       </div>
     </div>
@@ -441,6 +591,174 @@ function viewFile(fileName: string) {
   border: 1px solid var(--border);
   color: var(--text-primary);
   border-radius: 4px;
+}
+
+/* Project versions bar */
+.pver-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.pver-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.pver-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.pver-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.pver-tag:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.pver-tag.active {
+  border-color: var(--accent);
+  background: rgba(34, 211, 238, 0.1);
+  color: var(--accent);
+  font-weight: 500;
+}
+.pver-action {
+  display: none;
+  width: 14px;
+  height: 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 2px;
+  line-height: 14px;
+  text-align: center;
+  padding: 0;
+}
+.pver-tag:hover .pver-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pver-action:hover {
+  color: var(--accent);
+}
+.pver-action-danger:hover {
+  color: var(--danger);
+}
+.pver-add {
+  width: 24px;
+  height: 24px;
+  border: 1px dashed var(--border-light);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pver-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(34, 211, 238, 0.08);
+}
+
+/* Access toggle */
+.access-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.access-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.toggle-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.toggle-track {
+  display: block;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+}
+.toggle-btn.on .toggle-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggle-thumb {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.toggle-btn.on .toggle-thumb {
+  transform: translateX(16px);
+}
+
+/* Active info bar */
+.active-info {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.active-info strong {
+  color: var(--accent);
+}
+.access-off-hint {
+  color: var(--warning);
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+.empty-pver {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 24px 0;
+  text-align: center;
 }
 
 .rm-versions-section {

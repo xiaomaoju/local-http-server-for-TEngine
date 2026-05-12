@@ -260,6 +260,10 @@ body {
   max-width: 90px;
 }
 
+.config-version {
+  max-width: 80px;
+}
+
 .config-field {
   display: flex;
   flex-direction: column;

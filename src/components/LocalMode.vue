@@ -13,6 +13,7 @@ interface ProjectConfig {
   platforms: string[];
   cors_enabled: boolean;
   package_name: string;
+  project_version: string;
   platform_access: Record<string, boolean>;
 }
 
@@ -451,6 +452,10 @@ function onResizeEnd() {
               <label>包名</label>
               <input v-model="activeProject.package_name" placeholder="DefaultPackage" :disabled="isRunning(activeProject.id)" />
             </div>
+            <div class="config-field config-version">
+              <label>版本号</label>
+              <input v-model="activeProject.project_version" placeholder="v1" :disabled="isRunning(activeProject.id)" />
+            </div>
             <div class="config-field checkbox-field tooltip-wrap">
               <input type="checkbox" v-model="activeProject.cors_enabled" :disabled="isRunning(activeProject.id)" />
               <label>CORS</label>
@@ -528,16 +533,16 @@ function onResizeEnd() {
           <div class="server-urls" v-if="isRunning(activeProject.id)">
             <div class="url-row">
               <span class="url-label">本机</span>
-              <span class="url-text">http://127.0.0.1:{{ activeProject.port }}/{{ activeProject.project_name }}/</span>
-              <button class="url-copy" @click="copyUrl(`http://127.0.0.1:${activeProject.port}/${activeProject.project_name}/`)">
-                {{ copiedUrl === `http://127.0.0.1:${activeProject.port}/${activeProject.project_name}/` ? '&#10003;' : '&#128203;' }}
+              <span class="url-text">http://127.0.0.1:{{ activeProject.port }}/{{ activeProject.project_version }}/{{ activeProject.project_name }}/</span>
+              <button class="url-copy" @click="copyUrl(`http://127.0.0.1:${activeProject.port}/${activeProject.project_version}/${activeProject.project_name}/`)">
+                {{ copiedUrl === `http://127.0.0.1:${activeProject.port}/${activeProject.project_version}/${activeProject.project_name}/` ? '&#10003;' : '&#128203;' }}
               </button>
             </div>
             <div class="url-row" v-for="ip in localIps" :key="ip">
               <span class="url-label">局域网</span>
-              <span class="url-text">http://{{ ip }}:{{ activeProject.port }}/{{ activeProject.project_name }}/</span>
-              <button class="url-copy" @click="copyUrl(`http://${ip}:${activeProject.port}/${activeProject.project_name}/`)">
-                {{ copiedUrl === `http://${ip}:${activeProject.port}/${activeProject.project_name}/` ? '&#10003;' : '&#128203;' }}
+              <span class="url-text">http://{{ ip }}:{{ activeProject.port }}/{{ activeProject.project_version }}/{{ activeProject.project_name }}/</span>
+              <button class="url-copy" @click="copyUrl(`http://${ip}:${activeProject.port}/${activeProject.project_version}/${activeProject.project_name}/`)">
+                {{ copiedUrl === `http://${ip}:${activeProject.port}/${activeProject.project_version}/${activeProject.project_name}/` ? '&#10003;' : '&#128203;' }}
               </button>
             </div>
           </div>
