@@ -1,11 +1,13 @@
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path, State},
-    http::{Method, StatusCode},
-    middleware,
+    extract::{DefaultBodyLimit, Extension, Multipart, Path, State},
+    http::{Method, Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::Deserialize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -14,9 +16,29 @@ use crate::config::ProjectConfig;
 use crate::serve;
 use crate::storage::Storage;
 use crate::ws;
-use crate::AppState;
+use crate::{AppState, Protocol};
 
-pub fn build_router(state: Arc<AppState>) -> Router {
+async fn protocol_gate(
+    Extension(protocol): Extension<Protocol>,
+    State(state): State<Arc<AppState>>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let blocked = match protocol {
+        Protocol::Http => !state.http_enabled.load(Ordering::Relaxed),
+        Protocol::Https => !state.https_enabled.load(Ordering::Relaxed),
+    };
+    if blocked {
+        let label = match protocol {
+            Protocol::Http => "HTTP",
+            Protocol::Https => "HTTPS",
+        };
+        return (StatusCode::FORBIDDEN, format!("{} access is disabled", label)).into_response();
+    }
+    next.run(req).await
+}
+
+pub fn build_router(state: Arc<AppState>, protocol: Protocol) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
@@ -25,6 +47,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let public = Router::new()
         .route("/api/health", get(health))
         .route("/api/auth/login", post(auth::login));
+
+    let settings = Router::new()
+        .route("/api/settings/protocol-access", get(get_protocol_access))
+        .route("/api/settings/protocol-access", put(set_protocol_access_cfg))
+        .layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
 
     let protected = Router::new()
         .route("/api/projects", get(list_projects))
@@ -77,18 +104,61 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     let ws_route = Router::new().route("/api/ws/logs", get(ws::ws_logs));
 
-    Router::new()
+    let gated = Router::new()
         .merge(public)
         .merge(protected)
         .merge(ws_route)
         .route("/res/*path", get(serve::serve_resource))
         .fallback(get(serve::serve_spa))
+        .layer(middleware::from_fn_with_state(state.clone(), protocol_gate))
+        .layer(Extension(protocol));
+
+    Router::new()
+        .merge(settings)
+        .merge(gated)
         .layer(cors)
         .with_state(state)
 }
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn get_protocol_access(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "tls_configured": state.tls_configured,
+        "http_enabled": state.http_enabled.load(Ordering::Relaxed),
+        "https_enabled": state.https_enabled.load(Ordering::Relaxed),
+    }))
+}
+
+#[derive(Deserialize)]
+struct ProtocolAccessRequest {
+    http_enabled: bool,
+    https_enabled: bool,
+}
+
+async fn set_protocol_access_cfg(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProtocolAccessRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if !state.tls_configured {
+        return Err((StatusCode::BAD_REQUEST, "TLS is not configured, cannot toggle protocol access".to_string()));
+    }
+    if !req.http_enabled && !req.https_enabled {
+        return Err((StatusCode::BAD_REQUEST, "At least one protocol must be enabled".to_string()));
+    }
+    state.http_enabled.store(req.http_enabled, Ordering::Relaxed);
+    state.https_enabled.store(req.https_enabled, Ordering::Relaxed);
+
+    tracing::info!("Protocol access updated: HTTP={}, HTTPS={}", req.http_enabled, req.https_enabled);
+
+    Ok(Json(serde_json::json!({
+        "http_enabled": req.http_enabled,
+        "https_enabled": req.https_enabled,
+    })))
 }
 
 async fn list_projects(

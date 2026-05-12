@@ -72,6 +72,9 @@ pub struct ServerConfig {
     pub token_expire_hours: u64,
     pub data_dir: PathBuf,
     pub port: u16,
+    pub tls_cert: Option<PathBuf>,
+    pub tls_key: Option<PathBuf>,
+    pub https_port: u16,
 }
 
 impl ServerConfig {
@@ -113,12 +116,23 @@ impl ServerConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(8082);
 
+        let tls_cert = std::env::var("TLS_CERT").ok().map(PathBuf::from);
+        let tls_key = std::env::var("TLS_KEY").ok().map(PathBuf::from);
+
+        let https_port: u16 = std::env::var("HTTPS_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8182);
+
         Self {
             password_hash,
             jwt_secret,
             token_expire_hours,
             data_dir,
             port,
+            tls_cert,
+            tls_key,
+            https_port,
         }
     }
 

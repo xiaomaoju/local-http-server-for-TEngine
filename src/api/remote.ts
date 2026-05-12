@@ -290,6 +290,17 @@ class RemoteApi {
     );
   }
 
+  async getProtocolAccess(): Promise<{ tls_configured: boolean; http_enabled: boolean; https_enabled: boolean }> {
+    return this.request("/api/settings/protocol-access");
+  }
+
+  async setProtocolAccess(httpEnabled: boolean, httpsEnabled: boolean): Promise<{ http_enabled: boolean; https_enabled: boolean }> {
+    return this.request("/api/settings/protocol-access", {
+      method: "PUT",
+      body: JSON.stringify({ http_enabled: httpEnabled, https_enabled: httpsEnabled }),
+    });
+  }
+
   async connectLogs(
     onMessage: (log: LogEntry) => void,
     onClose?: () => void,

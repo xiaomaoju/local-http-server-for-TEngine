@@ -30,7 +30,6 @@ function clearAllCache() {
           <button class="settings-close" @click="emit('close')">&times;</button>
         </div>
         <div class="settings-body">
-          <!-- 版本信息 -->
           <div class="settings-row">
             <div class="settings-row-info">
               <div class="settings-row-title">版本信息</div>
@@ -39,7 +38,6 @@ function clearAllCache() {
             <div class="settings-row-value">{{ version }}</div>
           </div>
 
-          <!-- 帮助 -->
           <div class="settings-row clickable" @click="emit('open-help'); emit('close')">
             <div class="settings-row-info">
               <div class="settings-row-title">帮助</div>
@@ -48,7 +46,6 @@ function clearAllCache() {
             <div class="settings-row-action">→</div>
           </div>
 
-          <!-- 清理缓存 -->
           <div class="settings-row clickable danger" @click="clearAllCache">
             <div class="settings-row-info">
               <div class="settings-row-title">清理所有缓存</div>
@@ -98,9 +95,7 @@ function clearAllCache() {
   font-weight: 600;
   color: var(--accent);
 }
-.settings-gear {
-  font-size: 16px;
-}
+.settings-gear { font-size: 16px; }
 .settings-close {
   background: transparent;
   border: none;
@@ -119,9 +114,7 @@ function clearAllCache() {
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
-.settings-body {
-  padding: 8px 0;
-}
+.settings-body { padding: 8px 0; }
 .settings-row {
   display: flex;
   align-items: center;
@@ -130,42 +123,14 @@ function clearAllCache() {
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   transition: background 0.15s;
 }
-.settings-row:last-child {
-  border-bottom: none;
-}
-.settings-row.clickable {
-  cursor: pointer;
-}
-.settings-row.clickable:hover {
-  background: var(--bg-tertiary);
-}
-.settings-row.danger:hover {
-  background: rgba(255, 107, 107, 0.06);
-}
-.settings-row-info {
-  flex: 1;
-  min-width: 0;
-}
-.settings-row-title {
-  font-size: 13px;
-  color: var(--text-primary);
-  font-weight: 500;
-}
-.settings-row-desc {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 3px;
-}
-.settings-row-value {
-  font-size: 13px;
-  color: var(--accent);
-  font-weight: 500;
-}
-.settings-row-action {
-  color: var(--text-muted);
-  font-size: 14px;
-}
-.settings-row.danger .settings-row-title {
-  color: #ff6b6b;
-}
+.settings-row:last-child { border-bottom: none; }
+.settings-row.clickable { cursor: pointer; }
+.settings-row.clickable:hover { background: var(--bg-tertiary); }
+.settings-row.danger:hover { background: rgba(255, 107, 107, 0.06); }
+.settings-row-info { flex: 1; min-width: 0; }
+.settings-row-title { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+.settings-row-desc { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+.settings-row-value { font-size: 13px; color: var(--accent); font-weight: 500; }
+.settings-row-action { color: var(--text-muted); font-size: 14px; }
+.settings-row.danger .settings-row-title { color: #ff6b6b; }
 </style>

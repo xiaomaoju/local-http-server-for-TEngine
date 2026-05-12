@@ -1,10 +1,49 @@
 <script setup lang="ts">
-defineProps<{ show: boolean; version: string }>();
+import { ref, watch } from "vue";
+import { api } from "../api/remote";
+
+const props = defineProps<{ show: boolean; version: string }>();
 const emit = defineEmits<{
   (e: "close"): void;
   (e: "open-help"): void;
   (e: "logout"): void;
 }>();
+
+const tlsConfigured = ref(false);
+const httpEnabled = ref(true);
+const httpsEnabled = ref(true);
+const protocolLoading = ref(false);
+
+watch(() => props.show, async (val) => {
+  if (!val) return;
+  try {
+    const data = await api.getProtocolAccess();
+    tlsConfigured.value = data.tls_configured;
+    httpEnabled.value = data.http_enabled;
+    httpsEnabled.value = data.https_enabled;
+  } catch {}
+});
+
+async function toggleProtocol(target: "http" | "https") {
+  let newHttp = httpEnabled.value;
+  let newHttps = httpsEnabled.value;
+
+  if (target === "http") newHttp = !newHttp;
+  else newHttps = !newHttps;
+
+  if (!newHttp && !newHttps) return;
+
+  protocolLoading.value = true;
+  try {
+    const res = await api.setProtocolAccess(newHttp, newHttps);
+    httpEnabled.value = res.http_enabled;
+    httpsEnabled.value = res.https_enabled;
+  } catch (e: any) {
+    alert(e?.message || "操作失败");
+  } finally {
+    protocolLoading.value = false;
+  }
+}
 
 function clearAllCache() {
   if (!confirm("确定清空浏览器本地缓存吗？\n\n会清除：\n- 已记住的登录密码\n- 其他界面状态\n\n清除后会自动退出登录。")) {
@@ -40,6 +79,37 @@ function clearAllCache() {
             </div>
             <div class="settings-row-value">{{ version }}</div>
           </div>
+
+          <template v-if="tlsConfigured">
+            <div class="settings-row">
+              <div class="settings-row-info">
+                <div class="settings-row-title">HTTP 访问</div>
+                <div class="settings-row-desc">允许通过 HTTP 协议访问服务</div>
+              </div>
+              <button
+                class="toggle-btn"
+                :class="{ on: httpEnabled, disabled: httpEnabled && !httpsEnabled }"
+                :disabled="protocolLoading || (httpEnabled && !httpsEnabled)"
+                @click="toggleProtocol('http')"
+              >
+                <span class="toggle-track"><span class="toggle-thumb" /></span>
+              </button>
+            </div>
+            <div class="settings-row">
+              <div class="settings-row-info">
+                <div class="settings-row-title">HTTPS 访问</div>
+                <div class="settings-row-desc">允许通过 HTTPS 协议访问服务</div>
+              </div>
+              <button
+                class="toggle-btn"
+                :class="{ on: httpsEnabled, disabled: httpsEnabled && !httpEnabled }"
+                :disabled="protocolLoading || (httpsEnabled && !httpEnabled)"
+                @click="toggleProtocol('https')"
+              >
+                <span class="toggle-track"><span class="toggle-thumb" /></span>
+              </button>
+            </div>
+          </template>
 
           <div class="settings-row clickable" @click="emit('open-help'); emit('close')">
             <div class="settings-row-info">
@@ -136,4 +206,43 @@ function clearAllCache() {
 .settings-row-value { font-size: 13px; color: var(--accent); font-weight: 500; }
 .settings-row-action { color: var(--text-muted); font-size: 14px; }
 .settings-row.danger .settings-row-title { color: #ff6b6b; }
+
+/* Toggle switch */
+.toggle-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.toggle-track {
+  display: block;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+}
+.toggle-btn.on .toggle-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggle-thumb {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.toggle-btn.on .toggle-thumb {
+  transform: translateX(18px);
+}
 </style>

@@ -48,6 +48,38 @@ const rememberPassword = ref(true);
 const loginError = ref("");
 const loginLoading = ref(false);
 
+const tlsConfigured = ref(false);
+const httpEnabled = ref(true);
+const httpsEnabled = ref(true);
+const protocolLoading = ref(false);
+
+async function loadProtocolAccess() {
+  try {
+    const data = await api.getProtocolAccess();
+    tlsConfigured.value = data.tls_configured;
+    httpEnabled.value = data.http_enabled;
+    httpsEnabled.value = data.https_enabled;
+  } catch {}
+}
+
+async function toggleProtocol(target: "http" | "https") {
+  let newHttp = httpEnabled.value;
+  let newHttps = httpsEnabled.value;
+  if (target === "http") newHttp = !newHttp;
+  else newHttps = !newHttps;
+  if (!newHttp && !newHttps) return;
+  protocolLoading.value = true;
+  try {
+    const res = await api.setProtocolAccess(newHttp, newHttps);
+    httpEnabled.value = res.http_enabled;
+    httpsEnabled.value = res.https_enabled;
+  } catch (e: any) {
+    alert(e?.message || "操作失败");
+  } finally {
+    protocolLoading.value = false;
+  }
+}
+
 const savedConnections = ref<SavedConnection[]>([]);
 const selectedConnectionId = ref<string>("");
 const showAddForm = ref(false);
@@ -326,6 +358,7 @@ async function handleLogin() {
       persistCurrentConnection();
       connected.value = true;
       await loadProjects();
+      loadProtocolAccess();
       logStreamClosed = false;
       connectWebSocket();
     } else {
@@ -1003,7 +1036,24 @@ onUnmounted(() => {
     <div style="display:flex;align-items:center;gap:8px;padding:4px 16px;background:var(--bg-secondary);border-bottom:1px solid var(--border);font-size:12px;">
       <span style="width:8px;height:8px;border-radius:50%;background:#4ade80;"></span>
       <span style="color:var(--text-secondary);">{{ serverUrl }}</span>
-      <button class="btn btn-secondary" @click="disconnect" style="margin-left:auto;font-size:11px;padding:2px 8px;">断开</button>
+      <template v-if="tlsConfigured">
+        <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+          <span class="protocol-label" :class="{ disabled: !httpEnabled }">HTTP</span>
+          <button
+            class="mini-toggle" :class="{ on: httpEnabled }"
+            :disabled="protocolLoading || (httpEnabled && !httpsEnabled)"
+            @click="toggleProtocol('http')"
+          ><span class="mini-track"><span class="mini-thumb" /></span></button>
+
+          <span class="protocol-label" :class="{ disabled: !httpsEnabled }" style="margin-left:8px;">HTTPS</span>
+          <button
+            class="mini-toggle" :class="{ on: httpsEnabled }"
+            :disabled="protocolLoading || (httpsEnabled && !httpEnabled)"
+            @click="toggleProtocol('https')"
+          ><span class="mini-track"><span class="mini-thumb" /></span></button>
+        </div>
+      </template>
+      <button class="btn btn-secondary" @click="disconnect" :style="tlsConfigured ? 'font-size:11px;padding:2px 8px;' : 'margin-left:auto;font-size:11px;padding:2px 8px;'">断开</button>
     </div>
 
     <!-- L1 Tabs: projects -->
@@ -2577,4 +2627,47 @@ onUnmounted(() => {
   background: var(--text-muted);
 }
 .rm-access-chip.on .rm-access-dot { background: #4ade80; }
+
+.protocol-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.protocol-label.disabled { color: var(--text-muted); opacity: 0.5; }
+.mini-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mini-toggle:disabled { cursor: not-allowed; opacity: 0.4; }
+.mini-track {
+  display: block;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+}
+.mini-toggle.on .mini-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.mini-thumb {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.mini-toggle.on .mini-thumb { transform: translateX(12px); }
 </style>
