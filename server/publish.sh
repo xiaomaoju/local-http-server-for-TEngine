@@ -55,7 +55,7 @@ info "第 1 步：在本地构建 Docker 镜像..."
 info "（首次构建大约 5-10 分钟，之后有缓存会快很多）"
 echo ""
 
-docker build -t "${IMAGE_NAME}:latest" -f "$SCRIPT_DIR/Dockerfile" "$PROJECT_ROOT"
+docker build --platform linux/amd64 -t "${IMAGE_NAME}:latest" -f "$SCRIPT_DIR/Dockerfile" "$PROJECT_ROOT"
 
 info "镜像构建完成！"
 
