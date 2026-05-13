@@ -18,8 +18,10 @@ RUN cargo build --release
 
 # Stage 3: Runtime
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 COPY --from=server-builder /app/server/target/release/tengine-server /usr/local/bin/tengine-server
 RUN mkdir -p /data
-EXPOSE 8082 8182
+EXPOSE 8082
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8082/api/health || exit 1
 CMD ["tengine-server"]

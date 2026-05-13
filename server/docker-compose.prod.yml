@@ -1,0 +1,21 @@
+services:
+  tengine-server:
+    image: tengine-server:latest
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    ports:
+      - "127.0.0.1:8082:${PORT:-8082}"
+    volumes:
+      - tengine-data:/data
+    env_file:
+      - .env
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  tengine-data:

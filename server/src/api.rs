@@ -39,10 +39,22 @@ async fn protocol_gate(
 }
 
 pub fn build_router(state: Arc<AppState>, protocol: Protocol) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
-        .allow_headers(Any);
+    let allowed_origins = std::env::var("CORS_ORIGINS").unwrap_or_default();
+    let cors = if allowed_origins.is_empty() || allowed_origins == "*" {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+            .allow_headers(Any)
+    } else {
+        let origins: Vec<_> = allowed_origins
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+            .allow_headers(Any)
+    };
 
     let public = Router::new()
         .route("/api/health", get(health))
@@ -102,7 +114,9 @@ pub fn build_router(state: Arc<AppState>, protocol: Protocol) -> Router {
         )
         .layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
 
-    let ws_route = Router::new().route("/api/ws/logs", get(ws::ws_logs));
+    let ws_route = Router::new()
+        .route("/api/ws/logs", get(ws::ws_logs))
+        .layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
 
     let gated = Router::new()
         .merge(public)
@@ -117,6 +131,7 @@ pub fn build_router(state: Arc<AppState>, protocol: Protocol) -> Router {
         .merge(settings)
         .merge(gated)
         .layer(cors)
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(state)
 }
 
