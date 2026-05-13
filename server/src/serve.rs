@@ -1,4 +1,5 @@
 use axum::{
+    body::Body,
     extract::{Request, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -7,6 +8,7 @@ use mime_guess::from_path;
 use percent_encoding::percent_decode_str;
 use rust_embed::Embed;
 use std::sync::Arc;
+use tokio_util::io::ReaderStream;
 
 use crate::ws;
 use crate::AppState;
@@ -132,25 +134,30 @@ pub async fn serve_resource(
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
 
-    match tokio::fs::read(&canonical).await {
-        Ok(bytes) => {
-            broadcast_request_log(&state, 200, "GET", &raw_path, &project.id);
-            let ext = canonical.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-            let mime = match ext.as_str() {
-                "version" | "hash" | "report" => "text/plain".to_string(),
-                "json" => "application/json".to_string(),
-                _ => from_path(&canonical).first_or_octet_stream().to_string(),
-            };
-            let mut headers = HeaderMap::new();
-            headers.insert(header::CONTENT_TYPE, format!("{}; charset=utf-8", mime).parse().unwrap());
-            headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
-            (StatusCode::OK, headers, bytes).into_response()
-        }
+    let file = match tokio::fs::File::open(&canonical).await {
+        Ok(f) => f,
         Err(_) => {
             broadcast_request_log(&state, 404, "GET", &raw_path, &project.id);
-            (StatusCode::NOT_FOUND, "Not found").into_response()
+            return (StatusCode::NOT_FOUND, "Not found").into_response();
         }
-    }
+    };
+
+    let file_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+
+    broadcast_request_log(&state, 200, "GET", &raw_path, &project.id);
+    let ext = canonical.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let mime = match ext.as_str() {
+        "version" | "hash" | "report" => "text/plain".to_string(),
+        "json" => "application/json".to_string(),
+        _ => from_path(&canonical).first_or_octet_stream().to_string(),
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, format!("{}; charset=utf-8", mime).parse().unwrap());
+    headers.insert(header::CONTENT_LENGTH, file_size.to_string().parse().unwrap());
+
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+    (StatusCode::OK, headers, body).into_response()
 }
 
 fn broadcast_request_log(state: &Arc<AppState>, status: u16, method: &str, path: &str, project_id: &str) {
