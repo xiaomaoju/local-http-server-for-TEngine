@@ -1,6 +1,6 @@
 # 项目版本与平台访问开关实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **历史计划档案：** 本文保留当时的设计、示例代码与任务清单，不代表当前待办或执行指令。继续开发时遵循根目录 [AGENTS.md](../../../AGENTS.md) 与 [开发指南](../../development.md)，以当前源码及用户需求为准；无需 Claude Code / Superpowers。
 
 **Goal:** 在 TEngineHttp 远程模式中引入两层版本模型（项目版本 / Bundle 版本），并为本地与远程模式的每个平台增加独立访问开关。
 

@@ -1,98 +1,92 @@
-use axum::{
-    extract::{Query, State, WebSocketUpgrade},
-    response::Response,
+use crate::{
+    auth::{self, Auth},
+    db::{self, ApiError, ApiResult},
+    AppState,
 };
-use axum::extract::ws::{Message, WebSocket};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use axum::{
+    extract::{
+        ws::{Message, WebSocket},
+        Extension, Query, State, WebSocketUpgrade,
+    },
+    response::Response,
+    Json,
+};
+use serde::Deserialize;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use crate::AppState;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogMessage {
-    pub timestamp: String,
-    pub r#type: String,
-    pub status: u16,
-    pub method: String,
-    pub path: String,
-    pub project_id: String,
-    pub message: String,
+pub async fn ticket(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<Auth>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let mut tickets = state.tickets.lock().await;
+    tickets.retain(|_, (_, issued)| issued.elapsed() < Duration::from_secs(30));
+    if tickets.len() >= 4096 {
+        return Err(ApiError::bad("日志连接过多，请稍后重试"));
+    }
+    let ticket = auth::token();
+    tickets.insert(auth::digest(&ticket), (auth.hash, Instant::now()));
+    Ok(Json(serde_json::json!({"ticket": ticket})))
 }
-
 #[derive(Deserialize)]
-pub struct WsQuery {
-    pub token: String,
+pub struct TicketQuery {
+    ticket: String,
 }
-
 pub async fn ws_logs(
     ws: WebSocketUpgrade,
-    Query(query): Query<WsQuery>,
+    Query(query): Query<TicketQuery>,
     State(state): State<Arc<AppState>>,
-) -> Response {
-    use jsonwebtoken::{decode, DecodingKey, Validation};
-    use crate::auth::Claims;
-
-    let validation = Validation::default();
-    let result = decode::<Claims>(
-        &query.token,
-        &DecodingKey::from_secret(state.server_config.jwt_secret.as_bytes()),
-        &validation,
-    );
-
-    if result.is_err() {
-        return (axum::http::StatusCode::UNAUTHORIZED, "Invalid token").into_response();
+) -> ApiResult<Response> {
+    let (hash, issued) = state
+        .tickets
+        .lock()
+        .await
+        .remove(&auth::digest(&query.ticket))
+        .ok_or_else(ApiError::unauthorized)?;
+    if issued.elapsed() >= Duration::from_secs(30) {
+        return Err(ApiError::unauthorized());
     }
-
-    let rx = state.log_tx.subscribe();
-    ws.on_upgrade(move |socket| handle_ws(socket, rx))
+    let auth = auth::from_hash(&state, &hash).await?;
+    if auth.user.must_change_password {
+        return Err(ApiError::forbidden());
+    }
+    Ok(ws.on_upgrade(move |socket| handle(socket, state, hash)))
 }
-
-async fn handle_ws(mut socket: WebSocket, mut rx: tokio::sync::broadcast::Receiver<LogMessage>) {
+async fn handle(mut socket: WebSocket, state: Arc<AppState>, hash: String) {
+    let mut logs = state.log_tx.subscribe();
+    let mut resources = state.resource_tx.subscribe();
+    let mut access = state.access_tx.subscribe();
+    let mut timer = tokio::time::interval(Duration::from_secs(15));
     loop {
         tokio::select! {
-            msg = rx.recv() => {
-                match msg {
-                    Ok(log) => {
-                        let json = serde_json::to_string(&log).unwrap_or_default();
-                        if socket.send(Message::Text(json.into())).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(_) => break,
-                }
+            biased;
+            _ = access.recv() => {
+                let _ = socket.send(Message::Text("{\"type\":\"access_changed\"}".into())).await;
+                let _ = socket.send(Message::Close(None)).await;
+                break;
             }
-            msg = socket.recv() => {
-                match msg {
-                    Some(Ok(Message::Close(_))) | None => break,
-                    _ => {}
+            _ = timer.tick() => {
+                if auth::from_hash(&state, &hash).await.is_err() {
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
                 }
+                // Keep idle sessions alive through reverse proxies with read timeouts.
+                if socket.send(Message::Ping(Vec::new())).await.is_err() { break; }
             }
+            msg = logs.recv() => {
+                let log = match msg { Ok(v) => v, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue, Err(_) => break };
+                let auth = match auth::from_hash(&state, &hash).await { Ok(v) => v, Err(_) => break };
+                let allowed = if auth.user.admin() { true } else if let Some(id) = &log.project_id { db::authorized(&state, &auth.user.id, id, false).await.is_ok() } else { false };
+                if allowed && socket.send(Message::Text(serde_json::to_string(&log).unwrap().into())).await.is_err() { break; }
+            }
+            msg = resources.recv() => {
+                let log = match msg { Ok(v) => v, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue, Err(_) => break };
+                let auth = match auth::from_hash(&state, &hash).await { Ok(v) => v, Err(_) => break };
+                if crate::resource_logs::allowed(&state, &auth, &log).await && socket.send(Message::Text(serde_json::to_string(&log).unwrap().into())).await.is_err() { break; }
+            }
+            msg = socket.recv() => { if matches!(msg, Some(Ok(Message::Close(_))) | None | Some(Err(_))) { break; } }
         }
-    }
-}
-
-use axum::response::IntoResponse;
-
-pub fn broadcast_log(state: &Arc<AppState>, log: LogMessage) {
-    let _ = state.log_tx.send(log);
-}
-
-pub fn make_log(
-    r#type: &str,
-    status: u16,
-    method: &str,
-    path: &str,
-    project_id: &str,
-    message: &str,
-) -> LogMessage {
-    LogMessage {
-        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-        r#type: r#type.to_string(),
-        status,
-        method: method.to_string(),
-        path: path.to_string(),
-        project_id: project_id.to_string(),
-        message: message.to_string(),
     }
 }

@@ -59,7 +59,7 @@ if [ ! -f ".env" ]; then
     cat > .env << EOF
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 JWT_SECRET=${JWT_SECRET}
-PORT=8082
+PORT=8083
 DATA_DIR=/data
 TOKEN_EXPIRE_HOURS=24
 EOF
@@ -90,10 +90,11 @@ docker compose -f docker-compose.prod.yml ps
 echo "=========================================="
 
 SERVER_IP=$(curl -s --connect-timeout 3 ifconfig.me 2>/dev/null || echo "你的服务器IP")
+SERVICE_PORT=$(docker compose -f docker-compose.prod.yml exec -T tengine-server printenv PORT)
 
 echo ""
 info "Docker 服务部署完成！"
-info "服务运行在 127.0.0.1:8082（仅本机可访问）"
+info "服务运行在 127.0.0.1:${SERVICE_PORT}（仅本机可访问）"
 echo ""
 echo "  =================================================="
 echo "  接下来需要在宝塔面板中配置反向代理："
@@ -104,7 +105,7 @@ echo "     - 域名填: ${SERVER_IP} (或你的域名)"
 echo "     - 不需要选数据库和 PHP"
 echo "  3. 点击刚创建的站点 → 反向代理 → 添加反向代理"
 echo "     - 代理名称: tengine"
-echo "     - 目标URL: http://127.0.0.1:8082"
+echo "     - 目标URL: http://127.0.0.1:${SERVICE_PORT}"
 echo "     - 勾选「启用反向代理」"
 echo "  4. 保存，然后浏览器访问 http://${SERVER_IP}"
 echo "  =================================================="

@@ -1,113 +1,68 @@
 <script setup lang="ts">
-import { ref, computed, shallowRef } from "vue";
+import { ref } from "vue";
+import { Sun, Moon, Package } from "@lucide/vue";
 import LocalMode from "./components/LocalMode.vue";
 import RemoteMode from "./components/RemoteMode.vue";
-import SettingsDialog from "./components/SettingsDialog.vue";
-import HelpModal from "./components/HelpModal.vue";
-import { version as PKG_VERSION } from "../package.json";
-
+import { theme, toggleTheme } from "../shared/theme";
+import SegmentedControl from "../shared/SegmentedControl.vue";
 const mode = ref<"local" | "remote">("local");
-const LocalModeRef = shallowRef(LocalMode);
-const RemoteModeRef = shallowRef(RemoteMode);
-const currentMode = computed(() => mode.value === "local" ? LocalModeRef.value : RemoteModeRef.value);
-const showSettings = ref(false);
-const showHelp = ref(false);
-const APP_VERSION = `v${PKG_VERSION}`;
 </script>
-
 <template>
   <div class="app-container">
-    <div class="title-bar">
-      <h1>TEngine Http Server</h1>
-      <div class="mode-switcher">
-        <button
-          :class="{ active: mode === 'local' }"
-          @click="mode = 'local'"
-        >本地模式</button>
-        <button
-          :class="{ active: mode === 'remote' }"
-          @click="mode = 'remote'"
-        >远程模式</button>
-      </div>
-      <button class="settings-btn" @click="showSettings = true" title="设置">
-        <span class="gear">⚙</span>
+    <header class="desktop-header">
+      <span class="desktop-brand"
+        ><Package :size="16" />TEngine 资源工作台</span
+      >
+      <SegmentedControl :model-value="mode" label="工作模式" hide-label :options="[{value:'local',label:'本地服务'},{value:'remote',label:'远程协作'}]" @update:model-value="mode = $event as 'local' | 'remote'" />
+      <button
+        class="theme-toggle"
+        :aria-label="theme === 'dark' ? '切换浅色主题' : '切换深色主题'"
+        @click="toggleTheme"
+      >
+        <Sun v-if="theme === 'dark'" :size="16" /><Moon v-else :size="16" />
       </button>
-    </div>
-
-    <KeepAlive>
-      <component :is="currentMode" />
-    </KeepAlive>
-
-    <SettingsDialog
-      :show="showSettings"
-      :version="APP_VERSION"
-      @close="showSettings = false"
-      @open-help="showHelp = true"
-    />
-    <HelpModal :show="showHelp" @close="showHelp = false" />
+    </header>
+    <KeepAlive
+      ><LocalMode v-if="mode === 'local'" /><RemoteMode v-else
+    /></KeepAlive>
   </div>
 </template>
-
 <style scoped>
-.mode-switcher {
-  display: flex;
-  gap: 2px;
-  background: var(--bg-tertiary);
-  border-radius: 6px;
-  padding: 2px;
-}
-
-.mode-switcher button {
-  padding: 4px 16px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-
-.mode-switcher button.active {
-  background: var(--accent);
-  color: var(--bg-primary);
-}
-
-.mode-switcher button:hover:not(.active) {
-  color: var(--text-primary);
-}
-
-.settings-btn {
-  width: 32px;
-  height: 32px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 18px;
+.desktop-header {
+  height: 44px;
+  min-height: 44px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  transition: background 0.15s, color 0.15s, transform 0.3s;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-muted);
 }
-
-.settings-btn:hover {
-  background: var(--bg-tertiary);
-  color: var(--accent);
+.desktop-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
 }
-
-.settings-btn:active .gear {
-  transform: rotate(90deg);
+.theme-toggle {
+  border: 0;
+  height: 32px;
+  border-radius: 4px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--ink-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 13px;
 }
-
-.gear {
-  display: inline-block;
-  transition: transform 0.4s;
-  line-height: 1;
+.theme-toggle {
+  width: 32px;
 }
-
-.settings-btn:hover .gear {
-  transform: rotate(45deg);
+.app-container > :last-child {
+  flex: 1;
+  min-height: 0;
 }
 </style>

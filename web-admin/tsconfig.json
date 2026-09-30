@@ -12,6 +12,7 @@
     "noEmit": true,
     "jsx": "preserve",
     "strict": true,
+    "paths": { "vue": ["./node_modules/vue"], "@lucide/vue": ["./node_modules/@lucide/vue"] },
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true

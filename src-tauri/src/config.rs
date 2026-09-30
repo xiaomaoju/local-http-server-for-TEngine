@@ -73,6 +73,12 @@ impl Default for AppConfig {
 impl AppConfig {
     /// 获取配置文件路径
     fn config_path() -> PathBuf {
+        // Allows native UI checks to use an isolated directory on every host OS.
+        if let Some(directory) = std::env::var_os("TENGINE_LOCAL_DATA_DIR") {
+            let directory = PathBuf::from(directory);
+            fs::create_dir_all(&directory).ok();
+            return directory.join("config.json");
+        }
         let mut path = dirs_next().unwrap_or_else(|| PathBuf::from("."));
         path.push("tengine-http-server");
         fs::create_dir_all(&path).ok();

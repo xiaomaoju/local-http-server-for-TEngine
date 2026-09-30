@@ -5,11 +5,13 @@ services:
       context: ..
       dockerfile: server/Dockerfile
     ports:
-      - "127.0.0.1:8082:${PORT:-8082}"
+      - "127.0.0.1:${PORT:-8083}:${PORT:-8083}"
     volumes:
-      - tengine-data:/data
+      - tengine-management-data:/data
     env_file:
       - .env
+    environment:
+      PORT: "${PORT:-8083}"
     restart: always
     logging:
       driver: json-file
@@ -18,4 +20,4 @@ services:
         max-file: "3"
 
 volumes:
-  tengine-data:
+  tengine-management-data:

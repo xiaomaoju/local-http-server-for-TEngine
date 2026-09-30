@@ -1,0 +1,21 @@
+services:
+  tengine-server:
+    image: tengine-server:2.0.0-amd64
+    platform: linux/amd64
+    container_name: tengine-http-multiuser
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8083}:${PORT:-8083}"
+    volumes:
+      - ./data:/data
+    environment:
+      DATA_DIR: /data
+      PORT: "${PORT:-8083}"
+      REQUIRE_EXISTING_DB: "true"
+    env_file:
+      - settings.env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

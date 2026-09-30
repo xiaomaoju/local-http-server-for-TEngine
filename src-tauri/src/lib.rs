@@ -1,4 +1,5 @@
 mod config;
+mod credentials;
 mod server;
 mod sync;
 
@@ -649,6 +650,9 @@ pub fn run() {
         .plugin(tauri_plugin_websocket::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
+            credentials::get_connection_password,
+            credentials::save_connection_password,
+            credentials::remove_connection_password,
             get_projects,
             add_project,
             remove_project,

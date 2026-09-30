@@ -1,6 +1,6 @@
 # TEngine Remote Server Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **历史计划档案：** 本文保留当时的设计、示例代码与任务清单，不代表当前待办或执行指令。继续开发时遵循根目录 [AGENTS.md](../../../AGENTS.md) 与 [开发指南](../../development.md)，以当前源码及用户需求为准；无需 Claude Code / Superpowers。
 
 **Goal:** Extend the existing local HTTP asset server into a remote resource distribution service with Docker deployment, web admin UI, and Tauri remote mode.
 

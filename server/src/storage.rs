@@ -1,8 +1,16 @@
 use std::fs;
 use std::path::PathBuf;
 
-fn sanitize_path_component(s: &str) -> Result<&str, String> {
-    if s.is_empty() || s.contains('/') || s.contains('\\') || s.contains("..") {
+pub fn sanitize_path_component(s: &str) -> Result<&str, String> {
+    if s.is_empty()
+        || s.len() > 200
+        || s.trim() != s
+        || s == "."
+        || s.contains('/')
+        || s.contains('\\')
+        || s.contains("..")
+        || s.chars().any(|c| c.is_control() || ":*?\"<>|".contains(c))
+    {
         return Err(format!("Invalid path component: {}", s));
     }
     Ok(s)
@@ -18,7 +26,10 @@ impl Storage {
     }
 
     pub fn project_dir(&self, project_name: &str) -> Result<PathBuf, String> {
-        Ok(self.resources_dir.join(sanitize_path_component(project_name)?))
+        checked_dir(
+            self.resources_dir
+                .join(sanitize_path_component(project_name)?),
+        )
     }
 
     pub fn project_version_dir(
@@ -26,7 +37,10 @@ impl Storage {
         project_name: &str,
         project_version: &str,
     ) -> Result<PathBuf, String> {
-        Ok(self.project_dir(project_name)?.join(sanitize_path_component(project_version)?))
+        checked_dir(
+            self.project_dir(project_name)?
+                .join(sanitize_path_component(project_version)?),
+        )
     }
 
     pub fn platform_dir(
@@ -35,9 +49,10 @@ impl Storage {
         project_version: &str,
         platform: &str,
     ) -> Result<PathBuf, String> {
-        Ok(self
-            .project_version_dir(project_name, project_version)?
-            .join(sanitize_path_component(platform)?))
+        checked_dir(
+            self.project_version_dir(project_name, project_version)?
+                .join(sanitize_path_component(platform)?),
+        )
     }
 
     pub fn versions_dir(
@@ -46,7 +61,10 @@ impl Storage {
         project_version: &str,
         platform: &str,
     ) -> Result<PathBuf, String> {
-        Ok(self.platform_dir(project_name, project_version, platform)?.join("_versions"))
+        checked_dir(
+            self.platform_dir(project_name, project_version, platform)?
+                .join("_versions"),
+        )
     }
 
     pub fn version_dir(
@@ -56,26 +74,10 @@ impl Storage {
         platform: &str,
         version: &str,
     ) -> Result<PathBuf, String> {
-        Ok(self
-            .versions_dir(project_name, project_version, platform)?
-            .join(sanitize_path_component(version)?))
-    }
-
-    pub fn save_uploaded_file(
-        &self,
-        project_name: &str,
-        project_version: &str,
-        platform: &str,
-        version: &str,
-        file_name: &str,
-        data: &[u8],
-    ) -> Result<(), String> {
-        let safe_name = sanitize_path_component(file_name)?;
-        let dir = self.version_dir(project_name, project_version, platform, version)?;
-        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create version dir: {}", e))?;
-        let path = dir.join(safe_name);
-        fs::write(&path, data).map_err(|e| format!("Failed to write file: {}", e))?;
-        Ok(())
+        checked_dir(
+            self.versions_dir(project_name, project_version, platform)?
+                .join(sanitize_path_component(version)?),
+        )
     }
 
     pub fn list_versions(
@@ -94,7 +96,7 @@ impl Storage {
         let mut entries = Vec::new();
         if let Ok(read_dir) = fs::read_dir(&dir) {
             for entry in read_dir.flatten() {
-                if !entry.path().is_dir() {
+                if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                     continue;
                 }
                 let version = entry.file_name().to_string_lossy().to_string();
@@ -111,7 +113,11 @@ impl Storage {
                 let modified_timestamp = fs::metadata(entry.path())
                     .and_then(|m| m.modified())
                     .ok()
-                    .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    })
                     .unwrap_or(0);
                 entries.push(VersionEntry {
                     version,
@@ -121,7 +127,11 @@ impl Storage {
                 });
             }
         }
-        entries.sort_by(|a, b| b.modified_timestamp.cmp(&a.modified_timestamp));
+        entries.sort_by(|a, b| {
+            b.modified_timestamp
+                .cmp(&a.modified_timestamp)
+                .then_with(|| b.version.cmp(&a.version))
+        });
         entries
     }
 
@@ -154,7 +164,7 @@ impl Storage {
         let read_dir = fs::read_dir(&dir).map_err(|e| format!("读取目录失败: {}", e))?;
         for entry in read_dir.flatten() {
             let path = entry.path();
-            if !path.is_file() {
+            if safe_file(&dir, &entry.file_name().to_string_lossy()).is_err() {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
@@ -166,9 +176,17 @@ impl Storage {
             let modified_timestamp = metadata
                 .modified()
                 .ok()
-                .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+                .map(|t| {
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                })
                 .unwrap_or(0);
-            entries.push(FileEntry { name, size, modified_timestamp });
+            entries.push(FileEntry {
+                name,
+                size,
+                modified_timestamp,
+            });
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(entries)
@@ -190,48 +208,27 @@ impl Storage {
         let read_dir = fs::read_dir(&dir).map_err(|e| format!("读取目录失败: {}", e))?;
         for entry in read_dir.flatten() {
             let path = entry.path();
-            if !path.is_file() {
+            if safe_file(&dir, &entry.file_name().to_string_lossy()).is_err() {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            let bytes = fs::read(&path).map_err(|e| format!("读取文件 {} 失败: {}", name, e))?;
-            let size = bytes.len() as u64;
+            use std::io::Read;
+            let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+            let size = file.metadata().map_err(|e| e.to_string())?.len();
             let mut hasher = Md5::new();
-            hasher.update(&bytes);
+            let mut buffer = [0u8; 65536];
+            loop {
+                let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+                if count == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..count]);
+            }
             let md5 = format!("{:x}", hasher.finalize());
             entries.push(FileManifestEntry { name, size, md5 });
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(entries)
-    }
-
-    pub fn copy_files_from_version(
-        &self,
-        project_name: &str,
-        project_version: &str,
-        platform: &str,
-        new_version: &str,
-        base_version: &str,
-        copy_files: &[String],
-    ) -> Result<u32, String> {
-        let base_dir = self.version_dir(project_name, project_version, platform, base_version)?;
-        if !base_dir.exists() {
-            return Err(format!("基础版本不存在: {}", base_version));
-        }
-        let new_dir = self.version_dir(project_name, project_version, platform, new_version)?;
-        fs::create_dir_all(&new_dir).map_err(|e| format!("创建版本目录失败: {}", e))?;
-        let mut count = 0u32;
-        for name in copy_files {
-            let safe_name = sanitize_path_component(name)?;
-            let src = base_dir.join(safe_name);
-            if !src.exists() {
-                return Err(format!("基础版本中不存在文件: {}", name));
-            }
-            let dst = new_dir.join(safe_name);
-            fs::copy(&src, &dst).map_err(|e| format!("复制文件 {} 失败: {}", name, e))?;
-            count += 1;
-        }
-        Ok(count)
     }
 
     pub fn delete_project_version(
@@ -241,8 +238,7 @@ impl Storage {
     ) -> Result<(), String> {
         let dir = self.project_version_dir(project_name, project_version)?;
         if dir.exists() {
-            fs::remove_dir_all(&dir)
-                .map_err(|e| format!("删除项目版本目录失败: {}", e))?;
+            fs::remove_dir_all(&dir).map_err(|e| format!("删除项目版本目录失败: {}", e))?;
         }
         Ok(())
     }
@@ -261,16 +257,13 @@ impl Storage {
         if new_dir.exists() {
             return Err(format!("目标目录已存在: {}", new_name));
         }
-        fs::rename(&old_dir, &new_dir)
-            .map_err(|e| format!("重命名项目版本目录失败: {}", e))
+        fs::rename(&old_dir, &new_dir).map_err(|e| format!("重命名项目版本目录失败: {}", e))
     }
-
 
     pub fn delete_project(&self, project_name: &str) -> Result<(), String> {
         let dir = self.project_dir(project_name)?;
         if dir.exists() {
-            fs::remove_dir_all(&dir)
-                .map_err(|e| format!("Failed to delete project: {}", e))?;
+            fs::remove_dir_all(&dir).map_err(|e| format!("Failed to delete project: {}", e))?;
         }
         Ok(())
     }
@@ -305,7 +298,9 @@ mod tests {
     #[test]
     fn version_dir_includes_project_version_segment() {
         let s = Storage::new(PathBuf::from("/tmp/res"));
-        let p = s.version_dir("MyProject", "v1", "Android", "1.0.0").unwrap();
+        let p = s
+            .version_dir("MyProject", "v1", "Android", "1.0.0")
+            .unwrap();
         assert_eq!(
             p,
             PathBuf::from("/tmp/res/MyProject/v1/Android/_versions/1.0.0")
@@ -319,4 +314,27 @@ mod tests {
         assert!(s.version_dir("p", "..", "Android", "1.0.0").is_err());
         assert!(s.version_dir("p", "v1", "/etc", "1.0.0").is_err());
     }
+}
+
+fn checked_dir(path: PathBuf) -> Result<PathBuf, String> {
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("不允许使用符号链接或非目录路径".into());
+        }
+    }
+    Ok(path)
+}
+pub fn safe_file(dir: &std::path::Path, name: &str) -> Result<PathBuf, String> {
+    sanitize_path_component(name)?;
+    let path = dir.join(name);
+    let metadata = fs::symlink_metadata(&path).map_err(|_| "文件不存在")?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("不允许使用符号链接或非普通文件".into());
+    }
+    let root = dir.canonicalize().map_err(|_| "目录不存在")?;
+    let canonical = path.canonicalize().map_err(|_| "文件不存在")?;
+    if !canonical.starts_with(root) {
+        return Err("文件不在当前资源版本内".into());
+    }
+    Ok(canonical)
 }

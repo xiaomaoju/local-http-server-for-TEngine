@@ -1,9 +1,63 @@
-# Node
+# Node / Vite / TypeScript
 node_modules/
 dist/
+.vite/
+*.tsbuildinfo
 
-# Rust
-src-tauri/target/
+# Rust / Tauri generated files
+target/
+src-tauri/gen/
+
+# Test reports and local logs (keep test source and fixtures)
+coverage/
+test-results/
+playwright-report/
+blob-report/
+*.log
+
+# Local configuration and credentials (commit sanitized templates only)
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+servers.txt
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Offline installer source defaults; customize the copies in the delivery package
+!/server/offline/install.env
+!/server/offline/servers.txt
+
+# Runtime instances, databases and backups (keep server/migrations/*.sql)
+/TEngineHttpV2/
+/data/
+/backups/
+/server/data/
+/server/backups/
+/server/offline/data/
+/server/offline/backups/
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Image exports and installers; distribute separately from source
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.dmg
+*.app/
+*.exe
+*.msi
+*.AppImage
+*.deb
+*.rpm
 
 # IDE
 .vscode/
@@ -11,20 +65,13 @@ src-tauri/target/
 
 # OS
 .DS_Store
+._*
 Thumbs.db
 
-# Tauri
-src-tauri/gen/
+# Local delivery packages, verification artifacts and agent worktrees
+/Cache/
+/.codex/worktrees/
 
-# Server build artifacts
-server/target/
-server/*.tar
-server/*.tar.gz
-
-# Local env
-.env
-**/.env
-
-# Claude private workspace
+# Legacy Claude private workspace
 .claude/
 .claire/

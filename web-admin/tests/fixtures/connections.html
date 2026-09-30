@@ -1,0 +1,7 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>Connection fixture</title></head><body><div id="app" class="ui-workspace" style="height:100vh"></div><script type="module">
+import {createApp} from 'vue';
+import Connections from '/shared/DesktopConnections.vue';
+import {installInputDefaults} from '/shared/inputDefaults.ts';
+import '/shared/theme.css';
+createApp(Connections,{credentials:window.credentialFixture,busy:false,error:'',notice:'',onLogin:details=>{window.lastLogin=details}}).mount('#app');installInputDefaults();
+</script></body></html>

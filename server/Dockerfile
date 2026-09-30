@@ -4,6 +4,7 @@ WORKDIR /app/web-admin
 COPY web-admin/package.json web-admin/package-lock.json* ./
 RUN npm ci
 COPY web-admin/ ./
+COPY shared/ /app/shared/
 RUN npm run build
 
 # Stage 2: Build server
@@ -12,16 +13,16 @@ WORKDIR /app
 COPY server/Cargo.toml server/Cargo.lock* ./server/
 COPY server/build.rs ./server/
 COPY server/src/ ./server/src/
+COPY server/migrations/ ./server/migrations/
 COPY --from=web-builder /app/web-admin/dist ./web-admin/dist
 WORKDIR /app/server
-RUN cargo build --release
+RUN cargo build --release --locked
 
 # Stage 3: Runtime
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 COPY --from=server-builder /app/server/target/release/tengine-server /usr/local/bin/tengine-server
 RUN mkdir -p /data
-EXPOSE 8082
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8082/api/health || exit 1
+    CMD curl -f "http://127.0.0.1:${PORT:-8083}/api/health" || exit 1
 CMD ["tengine-server"]

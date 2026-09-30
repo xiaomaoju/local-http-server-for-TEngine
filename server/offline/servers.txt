@@ -1,0 +1,6 @@
+# 批量发布服务器清单。每行：SSH用户名@地址 SSH端口 远程安装包目录（实例路径由 install.env 决定）
+# 文件夹必须以 /TEngineHttpV2 结尾，避免覆盖旧 TEngineHttp。
+# 删除下面示例行开头的 #，并替换成实际信息；可填写多台。
+# admin@192.168.1.10 22 /volume3/packages/TEngineHttpV2
+# admin@192.168.1.11 22 /volume3/packages/TEngineHttpV2
+# admin@192.168.1.12 22 /volume3/packages/TEngineHttpV2

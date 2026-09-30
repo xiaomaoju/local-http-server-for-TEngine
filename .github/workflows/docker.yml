@@ -1,58 +1,93 @@
-name: Docker Image Build
+name: Build Offline Server
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      commit:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build amd64 image
-        uses: docker/build-push-action@v5
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm run check-version
+      - uses: docker/setup-buildx-action@v3
+      - name: Build Linux amd64 image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: server/Dockerfile
           platforms: linux/amd64
           load: true
-          tags: tengine-server:latest
+          provenance: false
+          tags: tengine-server:${{ inputs.version }}-amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Save and gzip
-        run: |
-          docker save tengine-server:latest | gzip > tengine-server.tar.gz
-          ls -lh tengine-server.tar.gz
-
-      - name: Upload as workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tengine-server-docker
-          path: |
-            tengine-server.tar.gz
-            server/docker-compose.offline.yml
-            server/.env.example
-          retention-days: 30
-
-      - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            tengine-server.tar.gz
-            server/docker-compose.offline.yml
-            server/.env.example
-          fail_on_unmatched_files: false
+      - name: Check first initialization and embedded Web admin
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          data_dir=$(mktemp -d)
+          image="tengine-server:$RELEASE_VERSION-amd64"
+          trap 'docker rm -f tengine-release-smoke >/dev/null 2>&1 || true' EXIT
+          docker run --rm -v "$data_dir:/data" -e BOOTSTRAP_ADMIN_USERNAME=release-test \
+            -e BOOTSTRAP_ADMIN_PASSWORD=isolated-release-smoke-password "$image" tengine-server --initialize
+          docker run -d --name tengine-release-smoke -v "$data_dir:/data" -e REQUIRE_EXISTING_DB=true "$image"
+          ready=false
+          for attempt in $(seq 1 30); do
+            if docker exec tengine-release-smoke curl -fsS http://127.0.0.1:8083/api/health; then ready=true; break; fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then docker logs tengine-release-smoke; exit 1; fi
+          docker exec tengine-release-smoke curl -fsS http://127.0.0.1:8083/ | grep -q '/assets/'
+      - name: Assemble offline package
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+        run: |
+          package_dir=Cache/release/TEngineHttpV2
+          mkdir -p "$package_dir"
+          cp server/offline/deploy.sh server/offline/batch-deploy.sh server/offline/docker-compose.yml \
+            server/offline/install.env server/offline/servers.txt server/offline/settings.env.example \
+            server/offline/发布指南.md server/nginx.conf.example "$package_dir/"
+          cp server/offline/README.md "$package_dir/README-部署说明.md"
+          docker save -o "$package_dir/tengine-server.tar" "tengine-server:$RELEASE_VERSION-amd64"
+          (cd "$package_dir" && sha256sum tengine-server.tar > image.sha256)
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const info = {
+            version: process.env.RELEASE_VERSION,
+            commit: process.env.RELEASE_COMMIT,
+            image: `tengine-server:${process.env.RELEASE_VERSION}-amd64`,
+            platform: 'linux/amd64',
+            builtAt: new Date().toISOString(),
+            source: 'GitHub Actions',
+          };
+          fs.writeFileSync('Cache/release/TEngineHttpV2/BUILD-INFO.json', JSON.stringify(info, null, 2) + '\n');
+          JS
+          sh -n "$package_dir/deploy.sh"
+          bash -n "$package_dir/batch-deploy.sh"
+          test ! -e "$package_dir/settings.env"
+          test ! -e "$package_dir/data"
+          (cd Cache/release && zip -qr TEngineHttpV2.zip TEngineHttpV2)
+          unzip -tq Cache/release/TEngineHttpV2.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-server-linux-amd64
+          path: Cache/release/TEngineHttpV2.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

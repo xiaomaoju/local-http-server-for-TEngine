@@ -1,5 +1,9 @@
 import { createApp } from "vue";
 import App from "./App.vue";
 import "./styles/main.css";
+import { installInputDefaults } from "../shared/inputDefaults";
 
-createApp(App).mount("#app");
+const app = createApp(App);
+app.mount("#app");
+app.onUnmount(installInputDefaults());
+import '../shared/theme.css';

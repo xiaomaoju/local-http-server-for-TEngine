@@ -4,14 +4,16 @@ services:
       context: ..
       dockerfile: server/Dockerfile
     ports:
-      - "${PORT:-8082}:${PORT:-8082}"
+      - "${PORT:-8083}:${PORT:-8083}"
       - "${HTTPS_PORT:-8182}:${HTTPS_PORT:-8182}"
     volumes:
-      - tengine-data:/data
+      - tengine-management-data:/data
       # - /path/to/certs:/certs:ro
     env_file:
       - .env
+    environment:
+      PORT: "${PORT:-8083}"
     restart: unless-stopped
 
 volumes:
-  tengine-data:
+  tengine-management-data:

@@ -1,0 +1,15 @@
+.git
+.claude
+.agents
+.ui-craft
+Cache
+node_modules
+web-admin/node_modules
+dist
+web-admin/dist
+server/target
+src-tauri/target
+**/.env
+**/*.sqlite
+**/*.sqlite-wal
+**/*.sqlite-shm

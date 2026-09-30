@@ -1,0 +1,61 @@
+import {test,expect,type Page} from '@playwright/test';
+const fixtureUrl='http://127.0.0.1:1431/web-admin/tests/fixtures/connections.html';
+async function setup(page:Page) {
+  const secrets=new Map<string,{url:string;username:string;password:string}>();
+  await page.exposeFunction('secretGet',(id:string,url:string,username:string)=>{const s=secrets.get(id);return s?.url===url&&s?.username===username?s.password:null;});
+  await page.exposeFunction('secretSave',(id:string,url:string,username:string,password:string)=>{secrets.set(id,{url,username,password});});
+  await page.exposeFunction('secretRemove',(id:string)=>{secrets.delete(id);});
+  await page.addInitScript(()=>{(window as any).credentialFixture={get:(window as any).secretGet,save:(window as any).secretSave,remove:(window as any).secretRemove};});
+  await page.goto(fixtureUrl);
+  return secrets;
+}
+test('connections persist, restore secure passwords and forget them when unchecked',async({page})=>{
+  const secrets=await setup(page);
+  await page.getByLabel('连接名称',{exact:true}).fill('群晖测试服');
+  await page.getByLabel('服务地址',{exact:true}).fill('http://localhost:8084/');
+  await page.getByLabel('用户名',{exact:true}).fill('children');
+  await page.getByLabel('密码',{exact:true}).fill('fixture-password');
+  await page.getByRole('checkbox',{name:/记住密码/}).check();
+  await page.getByRole('button',{name:'保存连接',exact:true}).click();
+  await expect(page.getByRole('status')).toHaveText('连接已保存。');
+  expect(secrets.size).toBe(1);
+  const stored=await page.evaluate(()=>localStorage.getItem('tengine_remote_connections'));
+  expect(stored).not.toContain('fixture-password');expect(stored).toContain('passwordStored');
+  await page.reload();await expect(page.getByLabel('密码',{exact:true})).toHaveValue('fixture-password');
+  await page.getByRole('button',{name:'登录',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).lastLogin?.url)).toBe('http://localhost:8084');
+  await page.getByRole('checkbox',{name:/记住密码/}).uncheck();
+  await page.getByRole('button',{name:'保存连接',exact:true}).click();
+  await expect.poll(()=>secrets.size).toBe(0);
+  await page.reload();await expect(page.getByLabel('密码',{exact:true})).toHaveValue('');
+  await page.getByRole('button',{name:'移除',exact:true}).click();
+  await page.getByRole('button',{name:'移除连接',exact:true}).click();
+  await expect(page.getByText('保存连接后，下次可直接选择。')).toBeVisible();
+});
+test('legacy profiles retain names and addresses but discard plaintext secrets; dirty switches are guarded',async({page})=>{
+  await setup(page);
+  await page.evaluate(()=>localStorage.setItem('tengine_remote_connections',JSON.stringify([{id:'conn_old',name:'Qunhui',url:'https://example.test',password:'legacy-plain',rememberPassword:true,lastUsed:1}])));
+  await page.reload();
+  await expect(page.getByLabel('连接名称',{exact:true})).toHaveValue('Qunhui');
+  await expect(page.getByLabel('服务地址',{exact:true})).toHaveValue('https://example.test');
+  expect(await page.evaluate(()=>localStorage.getItem('tengine_remote_connections'))).not.toContain('legacy-plain');
+  await page.getByLabel('连接名称',{exact:true}).fill('修改未保存');
+  await page.getByRole('button',{name:'新增连接',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'连接尚未保存'})).toBeVisible();
+  await page.getByRole('button',{name:'继续编辑',exact:true}).click();
+  await expect(page.getByLabel('连接名称',{exact:true})).toHaveValue('修改未保存');
+  await page.getByRole('button',{name:'新增连接',exact:true}).click();await page.getByRole('button',{name:'放弃修改',exact:true}).click();
+  await expect(page.getByLabel('连接名称',{exact:true})).toHaveValue('');
+});
+test('changing connection target clears password and keychain failure retains input',async({page})=>{
+  await setup(page);
+  await page.getByLabel('连接名称',{exact:true}).fill('临时连接');await page.getByLabel('用户名',{exact:true}).fill('children');
+  await page.getByLabel('密码',{exact:true}).fill('old-server-password');await page.getByLabel('服务地址',{exact:true}).fill('https://new.example.test');
+  await expect(page.getByLabel('密码',{exact:true})).toHaveValue('');
+  await page.getByLabel('密码',{exact:true}).fill('new-password');await page.getByRole('checkbox',{name:/记住密码/}).check();
+  await page.evaluate(()=>{(window as any).credentialFixture.save=async()=>{throw Error('凭据库已锁定')}});
+  await page.getByRole('button',{name:'保存连接',exact:true}).click();
+  await expect(page.getByRole('alert')).toContainText('凭据库已锁定');
+  await expect(page.getByLabel('密码',{exact:true})).toHaveValue('new-password');
+  expect(await page.evaluate(()=>localStorage.getItem('tengine_remote_connections'))).toBe('[]');
+});

@@ -1,45 +1,50 @@
 #!/usr/bin/env node
-// 把 package.json 的 version 同步到所有需要的地方:
-//   server/Cargo.toml, src-tauri/Cargo.toml, src-tauri/tauri.conf.json
-// 用法: node scripts/sync-version.mjs
-
+// package.json is the release version source. --check validates without writing.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
-const version = pkg.version;
+const args = process.argv.slice(2);
+if (args.some((arg) => arg !== "--check")) throw new Error("Usage: node scripts/sync-version.mjs [--check]");
+const checkOnly = args.includes("--check");
+const version = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
+if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`Invalid release version: ${version}`);
+const changes = [];
 
-console.log(`Sync version: ${version}`);
-
-// Cargo.toml: 仅替换顶层 [package] 段第一个 version = "..."
-function bumpCargoToml(file) {
-  const full = path.join(ROOT, file);
-  let text = fs.readFileSync(full, "utf8");
-  const before = text;
-  text = text.replace(
-    /(\[package\][\s\S]*?\nversion\s*=\s*")[^"]+(")/,
-    `$1${version}$2`,
-  );
-  if (text === before) {
-    throw new Error(`Failed to update version in ${file}`);
-  }
-  fs.writeFileSync(full, text);
-  console.log(`  ✓ ${file}`);
+function update(file, transform) {
+  const before = fs.readFileSync(path.join(ROOT, file), "utf8");
+  const after = transform(before);
+  if (before !== after) changes.push({ file, after });
 }
 
-// tauri.conf.json: 顶层 "version" 字段
-function bumpTauriConf(file) {
-  const full = path.join(ROOT, file);
-  const json = JSON.parse(fs.readFileSync(full, "utf8"));
-  json.version = version;
-  fs.writeFileSync(full, JSON.stringify(json, null, 2) + "\n");
-  console.log(`  ✓ ${file}`);
+function replaceVersion(file, pattern, value = version) {
+  update(file, (text) => {
+    if (!pattern.test(text)) throw new Error(`Version field missing in ${file}`);
+    return text.replace(pattern, (_, prefix, suffix) => `${prefix}${value}${suffix}`);
+  });
 }
 
-bumpCargoToml("server/Cargo.toml");
-bumpCargoToml("src-tauri/Cargo.toml");
-bumpTauriConf("src-tauri/tauri.conf.json");
+update("package-lock.json", (text) => {
+  const lock = JSON.parse(text);
+  lock.version = version;
+  lock.packages[""].version = version;
+  return JSON.stringify(lock, null, 2) + "\n";
+});
+for (const [dir, name] of [["server", "tengine-server"], ["src-tauri", "tengine-http-server"]]) {
+  replaceVersion(`${dir}/Cargo.toml`, /(\[package\][\s\S]*?\nversion\s*=\s*")[^"]+(")/);
+  replaceVersion(`${dir}/Cargo.lock`, new RegExp(`(\\[\\[package\\]\\]\\r?\\nname = "${name}"\\r?\\nversion = ")[^"]+(")`));
+}
+update("src-tauri/tauri.conf.json", (text) => {
+  const config = JSON.parse(text);
+  config.version = version;
+  return JSON.stringify(config, null, 2) + "\n";
+});
+replaceVersion("server/offline/docker-compose.yml", /(^    image: tengine-server:)[^\r\n]+($)/m, `${version}-amd64`);
 
-console.log("Done. Cargo.lock files will be regenerated on next build.");
+if (checkOnly && changes.length) throw new Error(`Run npm run sync-version; out of sync: ${changes.map(({ file }) => file).join(", ")}`);
+for (const { file, after } of changes) {
+  fs.writeFileSync(path.join(ROOT, file), after);
+  console.log(`Updated ${file}`);
+}
+console.log(`Version ${version}: ${checkOnly ? "checked" : "synchronized"}`);

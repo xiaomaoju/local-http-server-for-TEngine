@@ -1,7 +1,7 @@
 {
   "name": "tengine-http",
   "private": true,
-  "version": "0.0.4",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,15 +9,16 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "sync-version": "node scripts/sync-version.mjs",
-    "version": "node scripts/sync-version.mjs && git add server/Cargo.toml src-tauri/Cargo.toml src-tauri/tauri.conf.json"
+    "version": "node scripts/sync-version.mjs && git add server/Cargo.toml server/Cargo.lock src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json server/offline/docker-compose.yml",
+    "check-version": "node scripts/sync-version.mjs --check"
   },
   "dependencies": {
+    "@lucide/vue": "^1.48.0",
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-dialog": "^2.2.0",
     "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-shell": "^2.2.0",
     "@tauri-apps/plugin-websocket": "^2.4.2",
-    "js-sha256": "^0.11.1",
     "vue": "^3.5.13"
   },
   "devDependencies": {

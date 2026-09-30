@@ -5,94 +5,179 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: '已推送的版本标签，例如 v2.0.0'
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  build:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check version and release tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          npm run check-version
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+          const tag = process.env.RELEASE_TAG;
+          if (tag !== `v${version}`) throw new Error(`Tag ${tag} must match v${version}`);
+          const commit = execFileSync('git', ['rev-parse', `refs/tags/${tag}^{commit}`], { encoding: 'utf8' }).trim();
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          if (commit !== head) throw new Error('Checkout must match the existing release tag');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\nversion=${version}\ncommit=${commit}\nprerelease=${version.includes('-')}\n`);
+          JS
+
+  desktop:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
           - platform: macos-latest
             target: aarch64-apple-darwin
+            bundles: app,dmg
           - platform: macos-latest
             target: x86_64-apple-darwin
-          - platform: ubuntu-latest
+            bundles: app,dmg
+          - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-
+            bundles: deb,appimage
     runs-on: ${{ matrix.platform }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Linux deps
-        if: matrix.platform == 'ubuntu-latest'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libxdo-dev
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev xdg-utils
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Build Tauri app
+      - run: npm ci
+      - name: Build desktop bundles
+        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: '-'
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: ${{ github.ref_name }}
-          releaseBody: |
-            自动构建版本 ${{ github.ref_name }}
-
-            桌面客户端下载：选对应平台的安装包
-            Docker 服务部署：下载 tengine-server.tar.gz + docker-compose.offline.yml + .env.example
-          releaseDraft: false
-          prerelease: false
-          args: --target ${{ matrix.target }}
-
-      - name: Create Windows portable zip
-        if: matrix.platform == 'windows-latest'
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --ci
+          includeUpdaterJson: false
+      - name: Collect installers
+        env:
+          TAURI_ARTIFACTS: ${{ steps.tauri.outputs.artifactPaths }}
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          fs.mkdirSync('Cache/release', { recursive: true });
+          const files = JSON.parse(process.env.TAURI_ARTIFACTS).filter(file => fs.statSync(file).isFile() && /\.(exe|msi|dmg|deb|AppImage)$/.test(file));
+          if (!files.length) throw new Error('No desktop installers were produced');
+          for (const file of files) fs.copyFileSync(file, path.join('Cache/release', path.basename(file)));
+          JS
+      - name: Create Windows portable ZIP
+        if: runner.os == 'Windows'
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_TARGET: ${{ matrix.target }}
         shell: pwsh
         run: |
-          $exePath = "src-tauri/target/x86_64-pc-windows-msvc/release/TEngine Http Server.exe"
-          if (Test-Path $exePath) {
-            $zipDir = "portable"
-            New-Item -ItemType Directory -Force -Path $zipDir
-            Copy-Item $exePath "$zipDir/"
-            Compress-Archive -Path "$zipDir/*" -DestinationPath "TEngine-Http-Server-Windows-Portable.zip"
-          }
+          $exePath = "src-tauri/target/$env:BUILD_TARGET/release/tengine-http-server.exe"
+          if (-not (Test-Path $exePath)) { throw "Missing executable: $exePath" }
+          Compress-Archive -Path $exePath -DestinationPath "Cache/release/TEngineHttp-$env:RELEASE_VERSION-windows-x64-portable.zip"
+      - name: Create macOS application ZIP
+        if: runner.os == 'macOS'
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            "src-tauri/target/$BUILD_TARGET/release/bundle/macos/TEngine Http Server.app" \
+            "Cache/release/TEngineHttp-$RELEASE_VERSION-$BUILD_TARGET.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-${{ matrix.target }}
+          path: Cache/release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
-      - name: Upload portable zip to release
-        if: matrix.platform == 'windows-latest'
+  docker:
+    needs: prepare
+    uses: ./.github/workflows/docker.yml
+    with:
+      commit: ${{ needs.prepare.outputs.commit }}
+      version: ${{ needs.prepare.outputs.version }}
+
+  publish:
+    needs: [prepare, desktop, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: Cache/release
+      - name: Create asset checksums
+        working-directory: Cache/release
+        run: |
+          sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS.txt"
+          mv "$RUNNER_TEMP/SHA256SUMS.txt" .
+      - name: Publish complete release
         uses: softprops/action-gh-release@v2
         with:
-          files: TEngine-Http-Server-Windows-Portable.zip
-          tag_name: ${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ needs.prepare.outputs.commit }}
+          name: TEngineHttp ${{ needs.prepare.outputs.tag }}
+          draft: false
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: Cache/release/*
+          body: |
+            桌面客户端：按系统选择 Windows 安装包 / 便携 ZIP、macOS Apple Silicon / Intel DMG 或 ZIP、Linux deb / AppImage。
+
+            群晖 DS918+ / Linux amd64：下载 TEngineHttpV2.zip，修改 install.env，在安装包目录运行 sudo sh deploy.sh。配置、账号和资源保存在独立实例目录，更新前自动备份。
+
+            macOS 使用临时签名，未做 Apple Developer ID 签名或公证；Windows 未配置代码签名。
+            SHA256SUMS.txt 提供本次全部附件的 SHA-256 校验值。
