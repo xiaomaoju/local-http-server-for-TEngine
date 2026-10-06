@@ -8,14 +8,17 @@ export interface User {
 export interface PlatformSettings {
   access_enabled: boolean;
   active_bundle: string | null;
+  published_releases?: string[];
 }
 export interface ProjectVersion {
   name: string;
+  attachment_snapshot?: string | null;
   platform_settings: Record<string, PlatformSettings>;
 }
 export interface ProjectConfig {
   id: string;
   project_name: string;
+  project_type?: ProjectType;
   package_name: string;
   platforms: string[];
   project_versions: ProjectVersion[];
@@ -24,6 +27,21 @@ export interface ProjectConfig {
   can_manage: boolean;
   shared_with_me: boolean;
 }
+export type ProjectType = "bundle" | "apk" | "files";
+export const projectTypes = [{value: "bundle", label: "Bundle", symbol: "Ⓑ"}, {value: "apk", label: "APP更新", symbol: "Ⓐ"}, {value: "files", label: "文件", symbol: "Ⓕ"}];
+export const projectTypeLabel = (kind: ProjectType = "bundle") => projectTypes.find(item => item.value === kind)!.label;
+export const projectTypeSymbol = (kind: ProjectType = "bundle") => projectTypes.find(item => item.value === kind)!.symbol;
+export const publicResourcePath = (project: {project_name: string; project_type?: ProjectType}, version: string, platform: string, file = "", release?: string) => {
+  const kind = project.project_type || "bundle";
+  const prefix = {bundle: "res", apk: "appversion", files: "file"}[kind];
+  const parts = [version, project.project_name];
+  if (kind === "bundle" && platform) parts.push(platform);
+  if (kind === "apk" && release) parts.push("releases", release);
+  if (file) parts.push(file);
+  return `/${prefix}/${parts.map(encodeURIComponent).join("/")}${file ? "" : "/"}`;
+};
+export interface NativeFile { path: string; name: string; size: number }
+export interface ApkRelease { version: string; version_name: string; package_name: string; catalog_path: string; catalog_sha256: string; files: NativeFile[] }
 export interface VersionEntry {
   version: string;
   file_count: number;
@@ -35,6 +53,22 @@ export interface FileEntry {
   size: number;
   modified_timestamp: number;
 }
+export interface AttachmentListing { files: FileEntry[]; snapshot: string | null; revision?: number }
+export interface AttachmentResult<T> extends AttachmentListing { project: T }
+export type AttachmentInput = File | NativeFile;
+export interface AttachmentClient {
+  list(): Promise<AttachmentListing>;
+  upload(files: AttachmentInput[], current: AttachmentListing): Promise<AttachmentListing>;
+  remove(name: string, current: AttachmentListing): Promise<AttachmentListing>;
+  chooseFiles?: () => Promise<NativeFile[]>;
+  chooseDirectory?: () => Promise<string | null>;
+  readDirectory?: (directory: string) => Promise<NativeFile[]>;
+  directoryKey?: string;
+  url(name: string): string;
+  open(url: string): Promise<void>;
+}
+export const attachmentPath = (project: {project_name: string}, version: string, name: string) =>
+  `/appversion/${encodeURIComponent(version)}/${encodeURIComponent(project.project_name)}/docs/${encodeURIComponent(name)}`;
 export interface FileManifestEntry {
   name: string;
   size: number;
@@ -102,6 +136,7 @@ export class RemoteApi {
   getToken() {
     return this.token;
   }
+  rememberProject(project: ProjectConfig) { this.revisions.set(project.id, project.revision); }
   clear() {
     this.token = "";
     this.csrf = "";
@@ -200,7 +235,10 @@ export class RemoteApi {
     platform: string,
     file = "",
   ) {
-    return `${this.baseUrl || location.origin}/res/${[version, project.project_name, platform].map(encodeURIComponent).join("/")}/${file ? encodeURIComponent(file) : ""}`;
+    return `${this.baseUrl || location.origin}${publicResourcePath(project, version, platform, file)}`;
+  }
+  apkReleaseUrl(project: ProjectConfig, version: string, release: string, file: string) {
+    return `${this.baseUrl || location.origin}${publicResourcePath(project, version, "Android", file, release)}`;
   }
   async connectLogs(
     onMessage: (log: LogEntry | ResourceRequestLog | { type: "access_changed" }) => void,
@@ -234,7 +272,13 @@ export interface ConnectionCredentials {
 }
 export interface NativeUpload {
   credentials?: ConnectionCredentials;
-  chooseDirectory(): Promise<string | null>;
+  chooseFiles?(kind: "apk" | "catalog" | "files"): Promise<NativeFile[]>;
+  uploadFiles?(files: NativeFile[], project: ProjectConfig, projectVersion: string, version: string): Promise<{version: string}>;
+  uploadAttachments?(files: NativeFile[], project: ProjectConfig, projectVersion: string, revision: number): Promise<AttachmentResult<ProjectConfig>>;
+  readAttachmentDirectory?(directory: string): Promise<NativeFile[]>;
+  apkReleases?(directory: string): Promise<ApkRelease[]>;
+  uploadApkRelease?(directory: string, release: ApkRelease, project: ProjectConfig, projectVersion: string): Promise<{version: string}>;
+  chooseDirectory(title?: string): Promise<string | null>;
   manifest(directory: string, project: ProjectConfig, platform: string, version: string): Promise<FileManifestEntry[]>;
   versions(
     directory: string,

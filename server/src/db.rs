@@ -1,5 +1,5 @@
 use crate::{
-    config::{ProjectConfig, ServerConfig},
+    config::{ProjectConfig, ProjectType, ServerConfig},
     AppState,
 };
 use axum::{
@@ -18,6 +18,9 @@ pub type ApiResult<T> = Result<T, ApiError>;
 #[derive(Debug)]
 pub struct ApiError(pub StatusCode, pub String);
 impl ApiError {
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self(StatusCode::NOT_FOUND, message.into())
+    }
     pub fn bad(message: impl Into<String>) -> Self {
         Self(StatusCode::BAD_REQUEST, message.into())
     }
@@ -174,17 +177,17 @@ pub async fn project(pool: &SqlitePool, id: &str) -> ApiResult<ProjectConfig> {
     p.shared_with_me = false;
     Ok(p)
 }
-pub async fn project_by_name(pool: &SqlitePool, name: &str) -> ApiResult<ProjectConfig> {
-    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM projects WHERE json_extract(config, '$.project_name') = ? LIMIT 2").bind(name).fetch_all(pool).await?;
+pub async fn project_by_name(pool: &SqlitePool, kind: ProjectType, name: &str) -> ApiResult<ProjectConfig> {
+    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM projects WHERE COALESCE(json_extract(config, '$.project_type'), 'bundle') = ? AND json_extract(config, '$.project_name') = ? LIMIT 2").bind(kind.as_str()).bind(name).fetch_all(pool).await?;
     match ids.as_slice() {
         [id] => project(pool, id).await,
         [] => Err(ApiError::missing()),
         _ => Err(ApiError::conflict("存在同名项目，请修改项目名称后再下载")),
     }
 }
-pub async fn check_project_name(pool: &SqlitePool, name: &str, except: &str) -> ApiResult<()> {
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE json_extract(config, '$.project_name') = ? AND id != ?)").bind(name).bind(except).fetch_one(pool).await?;
-    if exists { return Err(ApiError::conflict("此项目名称已用于下载地址，请使用其他名称")); }
+pub async fn check_project_name(pool: &SqlitePool, kind: ProjectType, name: &str, except: &str) -> ApiResult<()> {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE COALESCE(json_extract(config, '$.project_type'), 'bundle') = ? AND json_extract(config, '$.project_name') = ? AND id != ?)").bind(kind.as_str()).bind(name).bind(except).fetch_one(pool).await?;
+    if exists { return Err(ApiError::conflict("此类型已存在同名项目，请使用其他名称")); }
     Ok(())
 }
 pub async fn authorized(

@@ -6,21 +6,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import Dialog from "../../shared/Dialog.vue";
 import ToggleSwitch from "../../shared/ToggleSwitch.vue";
 import StatusBadge from "../../shared/StatusBadge.vue";
+import SegmentedControl from "../../shared/SegmentedControl.vue";
+import LocalResources from "./LocalResources.vue";
+import { publicResourcePath, projectTypeLabel, projectTypeSymbol, projectTypes, type ProjectType } from "../../shared/api";
+import type { LocalProjectConfig as ProjectConfig } from "../api/local";
 import { Settings, Folder, Play, Square, RefreshCw } from "@lucide/vue";
 
 // ==================== Types ====================
-interface ProjectConfig {
-  id: string;
-  project_name: string;
-  bundles_dir: string;
-  port: number;
-  platforms: string[];
-  cors_enabled: boolean;
-  package_name: string;
-  project_version: string;
-  platform_access: Record<string, boolean>;
-}
-
 interface LogEntry {
   timestamp: string;
   status: number;
@@ -60,6 +52,9 @@ const serverUrls = ref<Map<string, string>>(new Map());
 const logs = ref<LogEntry[]>([]);
 const logPanelOpen = ref(false);
 const settingsOpen = ref(false);
+const createOpen = ref(false);
+const newProjectType = ref<ProjectType>("bundle");
+const localResourceBusy = ref(false);
 const deleteOpen = ref(false);
 const localError = ref("");
 const saving = ref(false);
@@ -90,7 +85,7 @@ function discardSettings() {
 async function applySettings() {
   if (await saveProject()) {
     settingsOpen.value = false;
-    loadResourceVersion();
+    if (localIsBundle.value) loadResourceVersion();
   }
 }
 const logPanelHeight = ref(220);
@@ -124,6 +119,12 @@ const AVAILABLE_PLATFORMS = [
 const activeProject = computed(() =>
   projects.value.find((p) => p.id === activeProjectId.value),
 );
+const localIsBundle = computed(() => !activeProject.value?.project_type || activeProject.value.project_type === "bundle");
+function localUrl(host: string) {
+  const project = activeProject.value!;
+  return `http://${host}:${project.port}${publicResourcePath(project, project.project_version, "")}`;
+}
+function updateLocalProject(updated: ProjectConfig) { const index = projects.value.findIndex(p => p.id === updated.id); if (index >= 0) projects.value[index] = updated; }
 
 const filteredLogs = computed(() => {
   if (!activeProjectId.value) return logs.value;
@@ -182,7 +183,7 @@ async function loadProjects() {
     localIps.value = await invoke<string[]>("get_local_ips");
     // 加载所有项目的版本号
     for (const p of projects.value) {
-      loadResourceVersion(p.id);
+      if (!p.project_type || p.project_type === "bundle") loadResourceVersion(p.id);
     }
   } catch (e) {
     localError.value = `加载项目失败: ${e}`;
@@ -191,9 +192,10 @@ async function loadProjects() {
 
 async function addProject() {
   try {
-    const project = await invoke<ProjectConfig>("add_project");
+    const project = await invoke<ProjectConfig>("add_project", {projectType: newProjectType.value});
     projects.value.push(project);
     activeProjectId.value = project.id;
+    createOpen.value = false;
     openSettings();
   } catch (e) {
     localError.value = `添加项目失败: ${e}`;
@@ -230,7 +232,7 @@ async function saveProject() {
   if (
     !project.project_name.trim() ||
     !project.project_version.trim() ||
-    !project.package_name.trim() ||
+    (localIsBundle.value && !project.package_name.trim()) ||
     project.port < 1024 ||
     project.port > 65535
   ) {
@@ -514,6 +516,7 @@ function onResizeEnd() {
 
 <template>
   <div class="local-mode">
+    <Dialog :open="createOpen" title="创建本地项目" @close="createOpen = false"><div class="ui-form"><label>项目类型</label><SegmentedControl :model-value="newProjectType" label="项目类型" :options="projectTypes" @update:model-value="newProjectType = $event as ProjectType" /><p class="ui-muted">类型创建后固定；同类型内名称唯一，不同类型可以同名。</p><div v-if="localError" class="ui-error" role="alert">{{ localError }}</div></div><template #footer><button @click="createOpen = false">取消</button><button class="primary" @click="addProject">创建项目</button></template></Dialog>
     <Dialog
       :open="settingsOpen"
       title="本地项目设置"
@@ -534,7 +537,9 @@ function onResizeEnd() {
             v-model="activeProject.project_name"
             :disabled="isRunning(activeProject.id)"
           />
+          <small class="ui-muted">同类型内名称唯一；更改名称或项目版本后需更新下载地址。</small>
         </div>
+        <p class="ui-muted">{{ projectTypeLabel(activeProject.project_type) }} · 类型创建后不可修改</p>
         <div class="ui-two">
           <div class="ui-field">
             <label for="local-port">服务端口</label
@@ -556,7 +561,7 @@ function onResizeEnd() {
             />
           </div>
         </div>
-        <div class="ui-field">
+        <div v-if="localIsBundle" class="ui-field">
           <label for="local-package">资源包名</label
           ><input
             id="local-package"
@@ -564,7 +569,7 @@ function onResizeEnd() {
             :disabled="isRunning(activeProject.id)"
           /><small class="ui-muted">与 Unity / YooAsset 的配置保持一致。</small>
         </div>
-        <div class="ui-field">
+        <div v-if="localIsBundle" class="ui-field">
           <label for="local-directory">资源目录</label>
           <div class="ui-inline">
             <input
@@ -587,7 +592,7 @@ function onResizeEnd() {
             :disabled="isRunning(activeProject.id)"
           />允许跨域下载（WebGL 需要）</label
         >
-        <div class="ui-field">
+        <div v-if="localIsBundle" class="ui-field">
           <label>目标平台（可多选）</label>
           <div class="ui-checks">
             <label v-for="p in AVAILABLE_PLATFORMS" :key="p"
@@ -602,7 +607,7 @@ function onResizeEnd() {
         </div>
         <div class="ui-field">
           <label>客户端下载</label>
-          <div v-for="p in activeProject.platforms" :key="p" class="ui-inline"><ToggleSwitch :model-value="activeProject.platform_access?.[p] !== false" :label="p + '客户端下载'" :disabled="isRunning(activeProject.id)" @update:model-value="toggleLocalAccess(p)" /></div>
+          <div v-for="p in activeProject.platforms" :key="p" class="ui-inline"><ToggleSwitch :model-value="activeProject.platform_access?.[p] !== false" :label="localIsBundle ? p + '客户端下载' : '允许客户端下载'" :disabled="isRunning(activeProject.id)" @update:model-value="toggleLocalAccess(p)" /></div>
         </div>
         <p v-if="isRunning(activeProject.id)" class="ui-muted">
           服务运行期间配置只读。请先停止服务，再修改并保存配置。
@@ -670,6 +675,9 @@ function onResizeEnd() {
         :key="project.id"
         class="tab"
         :class="{ active: activeProjectId === project.id }"
+        :disabled="localResourceBusy"
+        :aria-label="project.project_name + ' · ' + projectTypeLabel(project.project_type)"
+        :title="project.project_name + ' · ' + projectTypeLabel(project.project_type)"
         @click="activeProjectId = project.id"
       >
         <span
@@ -677,8 +685,9 @@ function onResizeEnd() {
           :class="{ running: isRunning(project.id) }"
         ></span>
         <span>{{ project.project_name }}</span>
+        <small class="ui-muted" aria-hidden="true">{{ projectTypeSymbol(project.project_type) }}</small>
       </button>
-      <button class="add-tab" @click="addProject" title="添加项目">+</button>
+      <button class="add-tab" :disabled="localResourceBusy" @click="newProjectType = 'bundle'; createOpen = true" title="添加项目">+</button>
     </div>
 
     <!-- Main Content -->
@@ -690,6 +699,7 @@ function onResizeEnd() {
             >项目版本 {{ activeProject.project_version }}</span><StatusBadge :tone="isRunning(activeProject.id) ? 'success' : 'neutral'">{{ isRunning(activeProject.id) ? '服务运行中' : '服务未启动' }}</StatusBadge><span class="ui-spacer" /><button
             class="ui-button"
             @click="openSettings"
+            :disabled="localResourceBusy"
           >
             <Settings :size="14" />项目设置
           </button>
@@ -698,7 +708,7 @@ function onResizeEnd() {
           {{ localError
           }}<button class="ui-button" @click="localError = ''">关闭</button>
         </div>
-        <div class="ui-toolbar">
+        <div v-if="localIsBundle" class="ui-toolbar">
           <button
             class="ui-button"
             @click="selectBundlesDir"
@@ -725,15 +735,16 @@ function onResizeEnd() {
             v-if="!isRunning(activeProject.id)"
             class="btn btn-primary"
             @click="startServer"
-            :disabled="!activeProject.bundles_dir"
+            :disabled="localResourceBusy || (localIsBundle && !activeProject.bundles_dir)"
           >
             <Play :size="14" /> 启动服务
           </button>
-          <button v-else class="btn btn-danger" @click="stopServer">
+          <button v-else class="btn btn-danger" :disabled="localResourceBusy" @click="stopServer">
             <Square :size="14" /> 停止服务
           </button>
 
           <button
+            v-if="localIsBundle"
             class="btn btn-secondary"
             @click="checkAndSync"
             :disabled="
@@ -751,21 +762,19 @@ function onResizeEnd() {
             <div class="url-row">
               <span class="url-label">本机</span>
               <span class="url-text"
-                >http://127.0.0.1:{{ activeProject.port }}/{{
-                  activeProject.project_version
-                }}/{{ activeProject.project_name }}/</span
+                >{{ localUrl('127.0.0.1') }}</span
               >
               <button
                 class="url-copy"
                 @click="
                   copyUrl(
-                    `http://127.0.0.1:${activeProject.port}/${activeProject.project_version}/${activeProject.project_name}/`,
+                    localUrl('127.0.0.1'),
                   )
                 "
               >
                 {{
                   copiedUrl ===
-                  `http://127.0.0.1:${activeProject.port}/${activeProject.project_version}/${activeProject.project_name}/`
+                  localUrl('127.0.0.1')
                     ? "已复制"
                     : "复制"
                 }}
@@ -774,21 +783,19 @@ function onResizeEnd() {
             <div class="url-row" v-for="ip in localIps" :key="ip">
               <span class="url-label">局域网</span>
               <span class="url-text"
-                >http://{{ ip }}:{{ activeProject.port }}/{{
-                  activeProject.project_version
-                }}/{{ activeProject.project_name }}/</span
+                >{{ localUrl(ip) }}</span
               >
               <button
                 class="url-copy"
                 @click="
                   copyUrl(
-                    `http://${ip}:${activeProject.port}/${activeProject.project_version}/${activeProject.project_name}/`,
+                    localUrl(ip),
                   )
                 "
               >
                 {{
                   copiedUrl ===
-                  `http://${ip}:${activeProject.port}/${activeProject.project_version}/${activeProject.project_name}/`
+                  localUrl(ip)
                     ? "已复制"
                     : "复制"
                 }}
@@ -797,10 +804,11 @@ function onResizeEnd() {
           </div>
           <div v-else class="server-url">服务未启动</div>
         </div>
+        <LocalResources v-if="!localIsBundle" :project="activeProject" :running="isRunning(activeProject.id)" @updated="updateLocalProject" @busy="localResourceBusy = $event" />
 
         <!-- Resource Version -->
         <div
-          v-if="resourceVersions.get(activeProject.id)?.length"
+          v-if="localIsBundle && resourceVersions.get(activeProject.id)?.length"
           class="version-bar"
         >
           <span class="version-bar-label">资源版本</span>

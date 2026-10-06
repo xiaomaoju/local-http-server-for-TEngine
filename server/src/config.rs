@@ -1,14 +1,19 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf};
+pub use crate::resources::ProjectType;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PlatformSettings {
     pub access_enabled: bool,
     pub active_bundle: Option<String>,
+    #[serde(default)]
+    pub published_releases: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectVersion {
     pub name: String,
+    #[serde(default)]
+    pub attachment_snapshot: Option<String>,
     #[serde(default)]
     pub platform_settings: HashMap<String, PlatformSettings>,
 }
@@ -16,6 +21,8 @@ pub struct ProjectVersion {
 pub struct ProjectConfig {
     pub id: String,
     pub project_name: String,
+    #[serde(default)]
+    pub project_type: ProjectType,
     pub platforms: Vec<String>,
     pub package_name: String,
     pub project_versions: Vec<ProjectVersion>,

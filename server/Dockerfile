@@ -14,6 +14,7 @@ COPY server/Cargo.toml server/Cargo.lock* ./server/
 COPY server/build.rs ./server/
 COPY server/src/ ./server/src/
 COPY server/migrations/ ./server/migrations/
+COPY shared/resources.rs shared/attachments.rs ./shared/
 COPY --from=web-builder /app/web-admin/dist ./web-admin/dist
 WORKDIR /app/server
 RUN cargo build --release --locked

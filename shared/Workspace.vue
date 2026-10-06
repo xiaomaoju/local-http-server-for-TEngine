@@ -26,6 +26,8 @@ import {
   GitCompareArrows,
 } from "@lucide/vue";
 import Dialog from "./Dialog.vue";
+import ApkDirectory from "./ApkDirectory.vue";
+import Attachments from "./Attachments.vue";
 import SegmentedControl from "./SegmentedControl.vue";
 import ToggleSwitch from "./ToggleSwitch.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -52,6 +54,15 @@ import {
   resourcePath,
   sizeText,
   timeText,
+  projectTypes,
+  projectTypeLabel,
+  projectTypeSymbol,
+  type ProjectType,
+  type NativeFile,
+  type ApkRelease,
+  type AttachmentClient,
+  type AttachmentResult,
+  attachmentPath,
 } from "./api";
 const props = defineProps<{ api: RemoteApi; native?: NativeUpload }>();
 const api = props.api;
@@ -109,6 +120,7 @@ function addClientLog(text: string, level: ClientLogRow["level"] = "info", globa
 const tablePage = ref(1);
 const panel = ref("");
 const form = ref({
+  project_type: "bundle" as ProjectType,
   project_name: "",
   project_version: "v1",
   package_name: "DefaultPackage",
@@ -137,10 +149,13 @@ const fileVersion = ref("");
 const fileQuery = ref("");
 const filePage = ref(1);
 const uploadFiles = ref<File[]>([]);
+const nativeFiles = ref<NativeFile[]>([]);
 const uploadVersion = ref("");
 const uploadDone = ref("");
 const directory = ref("");
 const localVersions = ref<VersionEntry[]>([]);
+const apkReleases = ref<ApkRelease[]>([]);
+const savedApkDirectory = ref("");
 const incremental = ref(true);
 const uploadNative = ref(false);
 const uploadPreparing = ref(false);
@@ -182,6 +197,45 @@ const platforms = ["Android", "iOS", "Windows", "MacOS", "Linux", "WebGL"];
 const project = computed(() =>
   projects.value.find((p) => p.id === selected.value),
 );
+const projectKind = computed(() => project.value?.project_type || "bundle");
+const isBundle = computed(() => projectKind.value === "bundle");
+const attachmentClient = computed<AttachmentClient>(() => {
+  const target = project.value!;
+  const version = projectVersion.value;
+  const path = target ? `${resourcePath(target, version)}/attachments` : "";
+  const accept = (result: AttachmentResult<ProjectConfig>) => {
+    api.rememberProject(result.project);
+    projects.value = projects.value.map(p => p.id === result.project.id ? result.project : p);
+    return {files: result.files, snapshot: result.snapshot, revision: result.project.revision};
+  };
+  return {
+    list: async () => accept(await api.request<AttachmentResult<ProjectConfig>>(path)),
+    upload: async (files, current) => {
+      let result: AttachmentResult<ProjectConfig>;
+      if (props.native?.uploadAttachments) result = await props.native.uploadAttachments(files as NativeFile[], target, version, current.revision!);
+      else {
+        const data = new FormData();
+        (files as File[]).forEach(file => data.append("files", file, file.name));
+        result = await api.request<AttachmentResult<ProjectConfig>>(path, {method: "POST", body: data, headers: {"If-Match": String(current.revision)}});
+      }
+      addClientLog("教程附件已更新并立即生效。");
+      return accept(result);
+    },
+    remove: async (name, current) => {
+      const result = await api.mutate<AttachmentResult<ProjectConfig>>(`${path}/${encodeURIComponent(name)}`, "DELETE", undefined, current.revision);
+      addClientLog(`教程附件已删除：${name}`);
+      return accept(result);
+    },
+    chooseFiles: props.native?.chooseFiles && props.native?.uploadAttachments ? () => props.native!.chooseFiles!("files") : undefined,
+    chooseDirectory: props.native?.readAttachmentDirectory ? () => props.native!.chooseDirectory("选择教程附件目录") : undefined,
+    readDirectory: props.native?.readAttachmentDirectory,
+    directoryKey: target ? preferenceKey("attachment-directory", target.id, version) : undefined,
+    url: name => `${api.getBaseUrl() || location.origin}${attachmentPath(target, version, name)}`,
+    open: async url => { if (props.native) await props.native.openUrl(url); else window.open(url, "_blank", "noopener,noreferrer"); },
+  };
+});
+const supportsApkDirectory = computed(() => projectKind.value === "apk" && !!props.native?.apkReleases && !!props.native.uploadApkRelease);
+const selectedApkRelease = computed(() => apkReleases.value.find(r => r.version === uploadVersion.value));
 const settings = computed(
   () =>
     project.value?.project_versions.find((v) => v.name === projectVersion.value)
@@ -189,7 +243,7 @@ const settings = computed(
 );
 const resourceUrl = computed(() =>
   project.value
-    ? api.resourceUrl(project.value, projectVersion.value, platform.value)
+    ? api.resourceUrl(project.value, projectVersion.value, platform.value, projectKind.value === "apk" ? "catalog.json" : "")
     : "",
 );
 const filteredProjects = computed(() =>
@@ -214,9 +268,9 @@ const visibleFiles = computed(() =>
   filteredFiles.value.slice((filePage.value - 1) * 100, filePage.value * 100),
 );
 const uploadSize = computed(() =>
-  uploadFiles.value.reduce((n, f) => n + f.size, 0),
+  (nativeFiles.value.length ? nativeFiles.value : uploadFiles.value).reduce((n, f) => n + f.size, 0),
 );
-const nativeUploadExists = computed(() => uploadNative.value && !!uploadVersion.value && versions.value.some(v => v.version === uploadVersion.value));
+const nativeUploadExists = computed(() => uploadNative.value && !!uploadVersion.value && (versions.value.some(v => v.version === uploadVersion.value) || (projectKind.value === "apk" && !!settings.value?.published_releases?.includes(uploadVersion.value))));
 const diffGroups = computed(() => uploadDiff.value ? [
   { key: "modified", label: "已修改", files: uploadDiff.value.modified, tone: "warning" },
   { key: "added", label: "新增", files: uploadDiff.value.added, tone: "success" },
@@ -236,6 +290,7 @@ function savePreference(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)); }
   catch { error.value = "客户端配置保存失败，请检查可用空间；当前操作仍可继续。"; }
 }
+watch(() => preferenceKey("apkDirectory", selected.value, projectVersion.value), key => { savedApkDirectory.value = readPreference(key, ""); }, {immediate: true});
 function setPublishMode(automatic: boolean) {
   autoPublish.value = automatic;
   savePreference(preferenceKey("autoPublish", selected.value, projectVersion.value, platform.value), automatic);
@@ -651,6 +706,7 @@ function panelDraft() {
         file.size,
         file.lastModified,
       ]),
+      nativeFiles.value.map(file => [file.path, file.size]),
       uploadVersion.value,
       directory.value,
     ]);
@@ -694,6 +750,7 @@ function editProjectVersion() {
 }
 function createProject() {
   form.value = {
+    project_type: "bundle",
     project_name: "",
     project_version: "v1",
     package_name: "DefaultPackage",
@@ -734,6 +791,7 @@ async function addPlatform() {
 function openSettings() {
   if (!project.value) return;
   form.value = {
+    project_type: project.value.project_type || "bundle",
     project_name: project.value.project_name,
     project_version: projectVersion.value,
     package_name: project.value.package_name,
@@ -776,6 +834,7 @@ async function reloadSettings() {
   const latest = await api.project(project.value!.id);
   const original = JSON.parse(baseline.value);
   const latestForm = {
+    project_type: latest.project_type || "bundle",
     project_name: latest.project_name,
     package_name: latest.package_name,
     platforms: [...latest.platforms],
@@ -835,7 +894,7 @@ async function release(version: string, unpublish = false) {
   const plat = platform.value;
   ask(
     unpublish ? "取消当前发布？" : "发布资源版本",
-    `${p.project_name} / ${pv} / ${plat}：${settings.value?.active_bundle || "尚未发布"} → ${unpublish ? "取消发布，客户端下载将不可用" : version}。`,
+    `${p.project_name} / ${pv}：${settings.value?.active_bundle || "尚未发布"} → ${unpublish ? (p.project_type === "apk" ? "停止提供 catalog，历史 APK 仍可下载" : "取消发布，客户端下载将不可用") : version}。`,
     unpublish ? "取消发布" : "确认发布",
     async () => {
       await api.mutate(
@@ -898,7 +957,7 @@ function deleteBundle(version: string) {
   const plat = platform.value;
   ask(
     "删除资源版本？",
-    `将永久删除 ${projectVersion.value} / ${platform.value} / ${version} 的全部文件。`,
+    `将永久删除 ${projectVersion.value} / ${version} 的全部文件。${p.project_type === "apk" ? "对应旧 catalog 的 APK 链接会失效；曾发布的编号不能复用。" : ""}`,
     "删除资源版本",
     async () => {
       await api.mutate(
@@ -934,14 +993,41 @@ async function openFiles(version: string) {
   }, true);
 }
 async function previewFile(name: string) {
-  const url = api.resourceUrl(
-    project.value!,
-    projectVersion.value,
-    platform.value,
-    name,
-  );
+  const url = fileUrl(name);
   if (props.native) await props.native.openUrl(url);
   else window.open(url, "_blank", "noopener,noreferrer");
+}
+function fileDownloadable(name: string) {
+  if (projectKind.value === "apk" && name.toLowerCase().endsWith(".apk")) return !!settings.value?.published_releases?.includes(fileVersion.value);
+  return fileVersion.value === settings.value?.active_bundle;
+}
+function fileUrl(name: string) {
+  return projectKind.value === "apk" && name.toLowerCase().endsWith(".apk")
+    ? api.apkReleaseUrl(project.value!, projectVersion.value, fileVersion.value, name)
+    : api.resourceUrl(project.value!, projectVersion.value, platform.value, name);
+}
+function setProjectType(kind: string) {
+  form.value.project_type = kind as ProjectType;
+  form.value.platforms = [kind === "files" ? "Any" : "Android"];
+  form.value.package_name = kind === "bundle" ? "DefaultPackage" : "";
+}
+function pickWebFiles(event: Event, role: "apk" | "catalog" | "files") {
+  const picked = Array.from((event.target as HTMLInputElement).files || []);
+  if (role === "catalog" && picked.some(f => f.name !== "catalog.json")) { dialogError.value = "目录文件必须命名为 catalog.json"; return; }
+  if (role === "apk" && picked.some(f => !f.name.toLowerCase().endsWith(".apk"))) { dialogError.value = "请选择 .apk 文件"; return; }
+  dialogError.value = "";
+  if (role === "files") uploadFiles.value = picked;
+  else uploadFiles.value = [...uploadFiles.value.filter(f => role === "apk" ? !f.name.toLowerCase().endsWith(".apk") : f.name !== "catalog.json"), ...picked];
+}
+async function pickNativeFiles(role: "apk" | "catalog" | "files") {
+  await run(async () => {
+    const picked = await props.native!.chooseFiles!(role);
+    if (!picked.length) return;
+    if (role === "catalog" && picked.some(f => f.name !== "catalog.json")) throw new Error("目录文件必须命名为 catalog.json");
+    if (role === "apk" && picked.some(f => !f.name.toLowerCase().endsWith(".apk"))) throw new Error("请选择 .apk 文件");
+    if (role === "files") nativeFiles.value = picked;
+    else nativeFiles.value = [...nativeFiles.value.filter(f => role === "apk" ? !f.name.toLowerCase().endsWith(".apk") : f.name !== "catalog.json"), ...picked];
+  }, true);
 }
 async function openMembers() {
   panel.value = "members";
@@ -1050,23 +1136,48 @@ async function openUpload() {
   uploadPreparing.value = true;
   panel.value = "upload";
   uploadFiles.value = [];
+  nativeFiles.value = [];
   uploadVersion.value = "";
   localVersions.value = [];
-  directory.value = props.native ? readPreference(preferenceKey("bundlesDir", selected.value), "") : "";
-  uploadNative.value = !!props.native;
+  apkReleases.value = [];
+  directory.value = props.native && isBundle.value ? readPreference(preferenceKey("bundlesDir", selected.value), "") : supportsApkDirectory.value ? savedApkDirectory.value : "";
+  uploadNative.value = !!props.native && (isBundle.value || supportsApkDirectory.value);
   diffBase.value = "";
   incremental.value = false;
   diffOpen.value = false;
   dialogError.value = "";
-  uploadPhase.value = "正在读取最新的本地与服务器版本…";
+  uploadPhase.value = isBundle.value ? "正在读取最新的本地与服务器版本…" : "正在读取服务器版本…";
   await run(async () => {
-    await Promise.all([loadVersions(true), directory.value ? loadLocalVersions() : Promise.resolve()]);
+    await Promise.all([loadVersions(true), directory.value ? (isBundle.value ? loadLocalVersions() : loadApkVersions()) : Promise.resolve()]);
     diffBase.value = versions.value[0]?.version || "";
     incremental.value = !!diffBase.value;
   }, true);
   uploadPreparing.value = false;
   uploadPhase.value = "";
   draftBaseline.value = panelDraft();
+}
+function selectApkVersion(version: string) {
+  uploadVersion.value = version;
+  nativeFiles.value = apkReleases.value.find(r => r.version === version)?.files || [];
+}
+function setApkSource(source: string) {
+  uploadNative.value = source === "directory";
+  uploadFiles.value = [];
+  nativeFiles.value = [];
+  uploadVersion.value = "";
+  if (uploadNative.value) selectApkVersion(apkReleases.value[0]?.version || "");
+}
+async function loadApkVersions() {
+  apkReleases.value = [];
+  selectApkVersion("");
+  apkReleases.value = await props.native!.apkReleases!(directory.value);
+  selectApkVersion(apkReleases.value[0]?.version || "");
+}
+async function uploadLatestApk() {
+  await openUpload();
+  if (dialogError.value || !selectedApkRelease.value) return;
+  if (nativeUploadExists.value) { dialogError.value = "最新 APK 编号已上传或曾发布，请查看现有版本，或构建新编号后重新读取。"; return; }
+  await upload();
 }
 async function loadLocalVersions() {
   const found = await props.native!.versions(directory.value, project.value!, platform.value);
@@ -1077,11 +1188,11 @@ async function loadLocalVersions() {
 async function chooseDirectory() {
   uploadPhase.value = "正在选择并读取本地构建目录…";
   await run(async () => {
-    const dir = await props.native!.chooseDirectory();
+    const dir = await props.native!.chooseDirectory(isBundle.value ? "选择 Bundles 目录" : "选择 APK 构建目录");
     if (!dir) return;
     directory.value = dir;
-    savePreference(preferenceKey("bundlesDir", selected.value), dir);
-    await loadLocalVersions();
+    if (isBundle.value) { savePreference(preferenceKey("bundlesDir", selected.value), dir); await loadLocalVersions(); }
+    else { savedApkDirectory.value = dir; savePreference(preferenceKey("apkDirectory", selected.value, projectVersion.value), dir); await loadApkVersions(); }
   }, true);
   uploadPhase.value = "";
 }
@@ -1089,7 +1200,7 @@ async function rereadUpload() {
   uploadPreparing.value = true;
   uploadPhase.value = "正在重新读取本地与服务器版本…";
   await run(async () => {
-    await Promise.all([loadVersions(true), loadLocalVersions()]);
+    await Promise.all([loadVersions(true), isBundle.value ? loadLocalVersions() : loadApkVersions()]);
     diffBase.value = versions.value[0]?.version || "";
     incremental.value = !!diffBase.value;
   }, true);
@@ -1101,7 +1212,7 @@ async function computeUploadDiff() {
   uploadDiff.value = null;
   diffError.value = "";
   diffLoading.value = false;
-  if (uploadPreparing.value || panel.value !== "upload" || !uploadNative.value || !props.native || !directory.value || !uploadVersion.value || !project.value) return;
+  if (!isBundle.value || uploadPreparing.value || panel.value !== "upload" || !uploadNative.value || !props.native || !directory.value || !uploadVersion.value || !project.value) return;
   const p = project.value;
   const pv = projectVersion.value;
   const plat = platform.value;
@@ -1127,7 +1238,32 @@ async function upload() {
     const automatic = autoPublish.value;
     const previousRelease = settings.value?.active_bundle || null;
     uploadPhase.value = "正在上传资源…";
-    if (uploadNative.value && props.native) {
+    if (!isBundle.value) {
+      if (projectKind.value === "apk" && uploadNative.value && supportsApkDirectory.value) {
+        if (!selectedApkRelease.value) throw new Error("请先选择并读取 APK 构建目录");
+        if (nativeUploadExists.value) throw new Error("此 APK 编号已上传或曾发布，不能覆盖或复用");
+        uploadPhase.value = "正在准备 APK、校验 SHA-256 并上传…";
+        uploadDone.value = (await props.native!.uploadApkRelease!(directory.value, selectedApkRelease.value, p, pv)).version;
+      } else {
+      const chosen = nativeFiles.value.length ? nativeFiles.value : uploadFiles.value;
+      if (!chosen.length) throw new Error("请先选择文件");
+      if (projectKind.value === "apk") {
+        if (!/^[1-9]\d*$/.test(uploadVersion.value)) throw new Error("请填写 versionCode 正整数作为发布编号");
+        if (chosen.length !== 2 || !chosen.some(f => f.name === "catalog.json") || chosen.filter(f => f.name.toLowerCase().endsWith(".apk")).length !== 1) throw new Error("请选择一个 APK 和一个 catalog.json");
+      }
+      if (nativeFiles.value.length && props.native?.uploadFiles) {
+        const result = await props.native.uploadFiles(nativeFiles.value, p, pv, uploadVersion.value);
+        uploadDone.value = result.version;
+      } else {
+        const data = new FormData();
+        data.append("platform", plat);
+        data.append("version", uploadVersion.value);
+        uploadFiles.value.forEach(file => data.append("files", file));
+        const result = await api.request<{version: string}>(`${resourcePath(p, pv)}/upload`, {method: "POST", body: data});
+        uploadDone.value = result.version;
+      }
+      }
+    } else if (uploadNative.value && props.native) {
       if (nativeUploadExists.value) throw new Error("此资源版本已上传，请构建新版本或选择其他本地版本。");
       if (!uploadVersion.value || !directory.value)
         throw new Error("请选择本地资源目录和版本");
@@ -1413,7 +1549,7 @@ onBeforeUnmount(() => {
         </header>
         <div v-if="page === 'projects' && projects.length" class="ui-project-tabs" aria-label="项目标签">
           <button :class="{ active: !selected }" :aria-pressed="!selected" :disabled="busy" @click="navigate('projects')">项目列表</button>
-          <button v-for="p in projects" :key="p.id" :class="{ active: selected === p.id }" :aria-pressed="selected === p.id" :title="p.project_name" :disabled="busy" @click="selectProject(p.id)">{{ p.project_name }}</button>
+          <button v-for="p in projects" :key="p.id" :class="{ active: selected === p.id }" :aria-pressed="selected === p.id" :aria-label="p.project_name + ' · ' + projectTypeLabel(p.project_type)" :title="p.project_name + ' · ' + projectTypeLabel(p.project_type)" :disabled="busy" @click="selectProject(p.id)"><span>{{ p.project_name }}</span><small class="ui-muted" aria-hidden="true">{{ projectTypeSymbol(p.project_type) }}</small></button>
           <button class="ui-add-tab" :disabled="busy" @click="createProject"><Plus :size="14" />新建项目</button>
         </div>
         <div class="ui-content" :aria-busy="busy || loading">
@@ -1461,7 +1597,7 @@ onBeforeUnmount(() => {
                 <thead>
                   <tr>
                     <th>项目名称</th>
-                    <th>平台</th>
+                    <th>类型 / 平台</th>
                     <th>项目版本</th>
                     <th class="ui-secondary-column">资源包</th>
                   </tr>
@@ -1469,7 +1605,7 @@ onBeforeUnmount(() => {
                 <tbody>
                   <tr v-for="p in filteredProjects" :key="p.id" class="ui-project-row" tabindex="0" :aria-label="'打开项目 ' + p.project_name" @click="selectProject(p.id)" @keydown.enter.prevent="selectProject(p.id)" @keydown.space.prevent="selectProject(p.id)">
                     <td class="truncate ui-project-name" :title="p.project_name"><span>{{ p.project_name }}</span><ChevronRight :size="14" aria-hidden="true" /></td>
-                    <td>{{ p.platforms.join(" · ") }}</td>
+                    <td>{{ projectTypeLabel(p.project_type) }}<span v-if="!p.project_type || p.project_type === 'bundle'" class="ui-muted"> · {{ p.platforms.join(" · ") }}</span></td>
                     <td class="truncate ui-mono" :title="p.project_versions.map(v => v.name).join(' · ')">{{ p.project_versions.map(v => v.name).join(' · ') || '未创建' }}</td>
                     <td class="ui-secondary-column ui-mono">
                       {{ p.package_name }}
@@ -1504,8 +1640,8 @@ onBeforeUnmount(() => {
               <button v-for="v in project.project_versions" :key="v.name" :class="{ active: projectVersion === v.name }" :aria-pressed="projectVersion === v.name" :disabled="busy" @click="selectProjectVersion(v.name)">{{ v.name }}</button>
               <button class="ui-add-tab" :disabled="busy" @click="createProjectVersion"><Plus :size="14" />新增版本</button>
             </div>
-              <span class="ui-spacer" /><button
-                class="primary"
+              <span class="ui-spacer" /><button v-if="supportsApkDirectory && savedApkDirectory" class="primary" :disabled="busy || !projectVersion" @click="uploadLatestApk"><Upload :size="16" />{{ autoPublish ? '上传并发布最新版本' : '上传最新版本' }}</button><button
+                :class="{primary: !(supportsApkDirectory && savedApkDirectory)}"
                 :disabled="busy || !projectVersion"
                 @click="openUpload"
               >
@@ -1513,7 +1649,7 @@ onBeforeUnmount(() => {
               </button>
             </div>
             <div class="ui-release-bar">
-              <div class="ui-platform-tabs" aria-label="平台标签">
+              <div v-if="isBundle" class="ui-platform-tabs" aria-label="平台标签">
                 <span class="ui-muted">平台</span>
                 <button v-for="p in project.platforms" :key="p" :class="{ active: platform === p }" :aria-pressed="platform === p" :disabled="busy" :title="p" @click="selectPlatform(p)">{{ p }}</button>
                 <button class="ui-add-tab" :disabled="busy || project.platforms.length >= 16" @click="createPlatform"><Plus :size="14" />新增平台</button>
@@ -1526,13 +1662,14 @@ onBeforeUnmount(() => {
             <div class="ui-status">
               <span class="ui-release-state"><StatusBadge :tone="settings?.active_bundle ? 'success' : 'warning'">{{ settings?.active_bundle ? '当前发布' : '尚未发布' }}</StatusBadge><strong class="ui-mono ui-key-value">{{ settings?.active_bundle || '—' }}</strong></span>
               <ToggleSwitch v-if="projectVersion" :model-value="!!settings?.access_enabled" label="允许客户端下载" :disabled="busy" @update:model-value="toggleAccess" />
+              <button v-if="projectKind === 'apk'" :disabled="busy || !projectVersion" @click="panel = 'attachments'"><Folder :size="14" />教程附件</button>
               <span class="ui-spacer" /><button
                 class="ui-action"
                 :disabled="!settings?.active_bundle"
                 :title="resourceUrl"
                 @click="copy(resourceUrl)"
               >
-                <Copy :size="14" />复制地址
+                <Copy :size="14" />{{ projectKind === 'apk' ? '复制 catalog 地址' : '复制地址' }}
               </button>
             </div>
             <div v-if="uploadDone || (busy && uploadPhase)" class="ui-upload-status">
@@ -1593,7 +1730,7 @@ onBeforeUnmount(() => {
                         {{ v.version }}
                       </td>
                       <td>
-                        <StatusBadge :tone="v.version === settings?.active_bundle ? 'success' : 'neutral'">{{ v.version === settings?.active_bundle ? '已发布' : '待发布' }}</StatusBadge>
+                        <StatusBadge :tone="v.version === settings?.active_bundle ? 'success' : 'neutral'">{{ v.version === settings?.active_bundle ? '已发布' : projectKind === 'apk' && settings?.published_releases?.includes(v.version) ? '历史发布' : '待发布' }}</StatusBadge>
                       </td>
                       <td class="num">{{ v.file_count }}</td>
                       <td class="num">{{ sizeText(v.total_size) }}</td>
@@ -1753,8 +1890,9 @@ onBeforeUnmount(() => {
             maxlength="80"
             placeholder="例如：星海计划"
           />
-          <small class="ui-muted">用于下载地址，全局唯一；改名后需更新下载地址。</small>
+          <small class="ui-muted">同类型内名称唯一，不同类型可同名；改名后需更新下载地址。</small>
         </div>
+        <div class="ui-field"><label>项目类型</label><SegmentedControl v-if="panel === 'create'" :model-value="form.project_type" label="项目类型" :options="projectTypes" @update:model-value="setProjectType" /><span v-else>{{ projectTypeLabel(form.project_type) }} · 创建后不可修改</span></div>
         <div v-if="panel === 'create'" class="ui-field">
           <label for="project-version">初始项目版本</label
           ><input
@@ -1765,13 +1903,13 @@ onBeforeUnmount(() => {
             >不同客户端版本可使用不同资源，通常从 v1 开始。</small
           >
         </div>
-        <div class="ui-field">
+        <div v-if="form.project_type === 'bundle'" class="ui-field">
           <label>目标平台（可多选）</label>
           <div class="ui-checks">
             <button v-for="p in [...new Set([...platforms, ...form.platforms])]" :key="p" type="button" class="ui-platform-switch" role="switch" :aria-checked="form.platforms.includes(p)" :class="{ selected: form.platforms.includes(p) }" @click="toggleFormPlatform(p)"><span class="ui-toggle-track" aria-hidden="true"><span /></span>{{ p }}</button>
           </div>
         </div>
-        <details>
+        <details v-if="form.project_type === 'bundle'">
           <summary>高级设置</summary>
           <div class="ui-field" style="margin-top: 8px">
             <label for="package-name">资源包名</label
@@ -1981,9 +2119,20 @@ onBeforeUnmount(() => {
       :busy="busy"
       @close="closePanel"
       ><form id="upload-form" class="ui-form" @submit.prevent="upload">
-        <div class="ui-upload-target"><strong>{{ project?.project_name }} / {{ projectVersion }} / {{ platform }}</strong><span class="ui-muted">{{ autoPublish ? '自动发布：上传完成立即发布，客户端将读取新版本。' : '手动发布：上传后保持待发布，不影响客户端。' }}</span></div>
-        <SegmentedControl v-if="native" :model-value="uploadNative ? 'directory' : 'files'" label="上传来源" :options="[{value:'files',label:'文件上传'},{value:'directory',label:'本地构建目录'}]" :disabled="busy" @update:model-value="uploadNative = $event === 'directory'" />
-        <template v-if="uploadNative"
+        <div class="ui-upload-target"><strong>{{ project?.project_name }} / {{ projectVersion }} / {{ isBundle ? platform : projectTypeLabel(projectKind) }}</strong><span class="ui-muted">{{ autoPublish ? '自动发布：上传完成立即发布，客户端将读取新版本。' : '手动发布：上传后保持待发布，不影响客户端。' }}</span></div>
+        <SegmentedControl v-if="supportsApkDirectory" :model-value="uploadNative ? 'directory' : 'files'" label="上传来源" :options="[{value:'files',label:'文件上传'},{value:'directory',label:'本地构建目录'}]" :disabled="busy" @update:model-value="setApkSource" />
+        <template v-if="!isBundle">
+          <template v-if="supportsApkDirectory && uploadNative"><ApkDirectory :directory="directory" :releases="apkReleases" :version="uploadVersion" :busy="busy" @choose="chooseDirectory" @reread="rereadUpload" @select="selectApkVersion" /><p v-if="nativeUploadExists" class="ui-warning-note"><AlertCircle :size="16" /><span>此编号已上传或曾发布；请查看现有版本，或构建新编号后重新读取。</span></p></template>
+          <template v-else-if="projectKind === 'apk'">
+            <div class="ui-field"><label for="apk-file">APK 安装包</label><button v-if="native?.chooseFiles" type="button" :disabled="busy" @click="pickNativeFiles('apk')">选择 APK</button><input v-else id="apk-file" type="file" accept=".apk" :disabled="busy" @change="pickWebFiles($event, 'apk')" /></div>
+            <div class="ui-field"><label for="catalog-file">catalog.json</label><button v-if="native?.chooseFiles" type="button" :disabled="busy" @click="pickNativeFiles('catalog')">选择 catalog.json</button><input v-else id="catalog-file" type="file" accept=".json" :disabled="busy" @change="pickWebFiles($event, 'catalog')" /></div>
+          </template>
+          <div v-else class="ui-field"><label for="generic-files">下载文件</label><button v-if="native?.chooseFiles" type="button" :disabled="busy" @click="pickNativeFiles('files')">选择文件</button><input v-else id="generic-files" type="file" multiple :disabled="busy" @change="pickWebFiles($event, 'files')" /></div>
+          <p v-if="!uploadNative && (nativeFiles.length || uploadFiles.length)" class="ui-muted" style="overflow-wrap:anywhere">{{ (nativeFiles.length ? nativeFiles : uploadFiles).map(f => f.name).join(' · ') }} · {{ sizeText(uploadSize) }}</p>
+          <div v-if="!supportsApkDirectory || !uploadNative" class="ui-field"><label for="generic-version">{{ projectKind === 'apk' ? '发布编号（versionCode）' : '文件版本号（可选）' }}</label><input id="generic-version" v-model="uploadVersion" :required="projectKind === 'apk'" :disabled="busy" :placeholder="projectKind === 'apk' ? '例如：69，与 catalog 中的 versionCode 一致' : '留空自动生成，不能覆盖已有版本'" /><small class="ui-muted">{{ projectKind === 'apk' ? 'APK 路径为 releases/发布编号/APK文件名。catalog 原样托管，请在构建时生成大小和 SHA-256。' : '平铺文件，整批上传后发布，不保留子目录。' }} 单次最多 512MB。</small></div>
+        </template>
+        <SegmentedControl v-if="native && isBundle" :model-value="uploadNative ? 'directory' : 'files'" label="上传来源" :options="[{value:'files',label:'文件上传'},{value:'directory',label:'本地构建目录'}]" :disabled="busy" @update:model-value="uploadNative = $event === 'directory'" />
+        <template v-if="isBundle && uploadNative"
           ><div class="ui-toolbar"><button type="button" :disabled="busy" @click="chooseDirectory"><Folder :size="16" />{{ directory ? '更换目录' : '选择 Bundles 目录' }}</button><button v-if="directory" type="button" :disabled="busy" @click="rereadUpload"><RefreshCw :size="14" />重新读取</button></div>
           <p class="ui-muted" style="overflow-wrap: anywhere">
             {{ directory || "目录应包含 平台/包名/资源版本 文件夹" }}
@@ -2024,7 +2173,7 @@ onBeforeUnmount(() => {
           </div>
         </template
         >
-        <template v-else
+        <template v-else-if="isBundle"
           ><div class="ui-field">
             <label for="resource-files">资源文件</label
             ><input
@@ -2067,7 +2216,7 @@ onBeforeUnmount(() => {
           class="primary"
           form="upload-form"
           type="submit"
-          :disabled="busy || nativeUploadExists || (uploadNative && incremental && !!diffBase && (diffLoading || !!diffError))"
+          :disabled="busy || nativeUploadExists || (supportsApkDirectory && uploadNative && !selectedApkRelease) || (isBundle && uploadNative && incremental && !!diffBase && (diffLoading || !!diffError))"
         >
           {{ busy ? '正在处理…' : autoPublish ? '上传并自动发布' : '确认上传' }}
         </button></template
@@ -2100,7 +2249,7 @@ onBeforeUnmount(() => {
       @close="closePanel"
       ><div class="ui-form">
         <p v-if="fileVersion !== settings?.active_bundle" class="ui-note">
-          此版本尚未发布。下载地址始终指向当前发布版本。
+          {{ projectKind === 'apk' ? '历史已发布 APK 可通过版本化地址下载；catalog 地址始终返回当前发布版本。' : '此版本尚未发布。下载地址始终指向当前发布版本。' }}
         </p>
         <div class="ui-toolbar">
           <Search :size="16" /><input
@@ -2133,15 +2282,10 @@ onBeforeUnmount(() => {
                       label="地址"
                       accessible-label="复制文件地址"
                       reason="此版本尚未发布，发布后可以复制下载地址。"
-                      :disabled="fileVersion !== settings?.active_bundle"
+                      :disabled="!fileDownloadable(f.name)"
                       @click="
                         copy(
-                          api.resourceUrl(
-                            project!,
-                            projectVersion,
-                            platform,
-                            f.name,
-                          ),
+                          fileUrl(f.name),
                         )
                       "
                     />
@@ -2149,7 +2293,7 @@ onBeforeUnmount(() => {
                       label="查看"
                       accessible-label="打开文件"
                       reason="此版本尚未发布，发布后可以打开文件。"
-                      :disabled="fileVersion !== settings?.active_bundle"
+                      :disabled="!fileDownloadable(f.name)"
                       @click="run(() => previewFile(f.name), true)"
                     />
                   </div>
@@ -2245,26 +2389,26 @@ onBeforeUnmount(() => {
         </button></template
       ></Dialog
     >
+    <Attachments v-if="project && projectKind === 'apk'" :key="project.id + '/' + projectVersion" :open="panel === 'attachments'" :target="project.project_name + ' / ' + projectVersion" :client="attachmentClient" :access-enabled="!!settings?.access_enabled" @close="panel = ''" @busy="busy = $event" />
     <Dialog :open="panel === 'help'" title="使用说明" @close="closePanel"
       ><div class="ui-form">
         <p>
           <strong>1. 创建项目</strong
-          ><br />填写项目名，选择目标平台；项目版本通常从 v1 开始。资源包名需与
-          Unity / YooAsset 保持一致。
+          ><br />填写项目名并选择类型；项目标签中 Ⓐ 表示 APP更新（Android APK），Ⓑ 表示 Bundle，Ⓕ 表示文件，悬停可查看完整类型名。类型创建后不可修改，项目版本通常从 v1 开始。Bundle 需选择目标平台，资源包名与 Unity / YooAsset 保持一致。
         </p>
         <p>
           <strong>2. 上传资源</strong
-          ><br />选择构建产物，检查项目版本与平台。资源版本对应
-          Bundle，上传完成后客户端暂时不会切换。
+          ><br />Bundle 选择构建产物并检查平台；APP更新上传一个 APK 和一个 catalog.json，发布编号使用 versionCode；文件类型可上传任意扩展名的平铺文件。默认上传完成后保持待发布，客户端暂时不会切换。
         </p>
         <p>
           <strong>3. 发布并接入</strong
-          ><br />确认发布后复制下载地址。游戏无需管理账号即可下载；关闭客户端下载可暂时下线该平台。
+          ><br />确认发布后复制下载地址。客户端无需管理账号即可下载；关闭客户端下载可暂时停止该项目版本或平台的资源下载。
         </p>
         <p>
           <strong>共享协作</strong
           ><br />所有者可按完整用户名分享项目。共享成员可以操作资源，所有者管理共享名单和整个项目的删除。
         </p>
+        <p><strong>APP 更新的教程附件</strong><br />点击“教程附件”，可上传单个 HTML 或任意平铺目录中的页面和资源，独立于 APK 更新。桌面记住目录并在下次打开时重新读取，浏览器每次需重新选择。确认上传后立即生效，同名替换，其他文件保留；本地目录删除文件不会自动删除服务器附件。HTML 地址为 /appversion/项目版本/项目名/docs/文件名，同域名沙箱支持页面交互，不保存浏览器本地进度。</p>
       </div></Dialog
     >
     <Dialog

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+pub use crate::resources::ProjectType;
 
 /// 单个项目的配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,6 +10,8 @@ pub struct ProjectConfig {
     pub id: String,
     /// 项目显示名称
     pub project_name: String,
+    #[serde(default)]
+    pub project_type: ProjectType,
     /// Bundles 根目录路径 (如 UnityProject/Bundles)
     pub bundles_dir: String,
     /// 服务端口
@@ -24,6 +27,12 @@ pub struct ProjectConfig {
     pub project_version: String,
     #[serde(default)]
     pub platform_access: std::collections::HashMap<String, bool>,
+    #[serde(default)]
+    pub active_releases: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub published_releases: Vec<String>,
+    #[serde(default)]
+    pub attachment_snapshot: Option<String>,
 }
 
 fn default_project_version() -> String {
@@ -37,6 +46,7 @@ impl Default for ProjectConfig {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             project_name: "TEngine".to_string(),
+            project_type: ProjectType::Bundle,
             bundles_dir: String::new(),
             port: 8081,
             platforms: vec!["Android".to_string()],
@@ -44,6 +54,9 @@ impl Default for ProjectConfig {
             package_name: "DefaultPackage".to_string(),
             project_version: default_project_version(),
             platform_access,
+            active_releases: Default::default(),
+            published_releases: vec![],
+            attachment_snapshot: None,
         }
     }
 }
@@ -72,7 +85,7 @@ impl Default for AppConfig {
 
 impl AppConfig {
     /// 获取配置文件路径
-    fn config_path() -> PathBuf {
+    pub(crate) fn config_path() -> PathBuf {
         // Allows native UI checks to use an isolated directory on every host OS.
         if let Some(directory) = std::env::var_os("TENGINE_LOCAL_DATA_DIR") {
             let directory = PathBuf::from(directory);
@@ -105,8 +118,12 @@ impl AppConfig {
     pub fn save(&self) -> Result<(), String> {
         let path = Self::config_path();
         let content = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(&path, content).map_err(|e| e.to_string())
+        let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let result = fs::write(&temporary, content).and_then(|_| fs::rename(&temporary, &path));
+        if result.is_err() { let _ = fs::remove_file(&temporary); }
+        result.map_err(|e| e.to_string())
     }
+    pub fn resources_dir() -> PathBuf { Self::config_path().parent().unwrap().join("resources") }
 }
 
 /// 获取用户配置目录

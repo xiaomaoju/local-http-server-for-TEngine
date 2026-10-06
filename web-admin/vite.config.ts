@@ -10,6 +10,8 @@ export default defineConfig({
     proxy: {
       "/api": "http://localhost:8083",
       "/res": "http://localhost:8083",
+      "/appversion": "http://localhost:8083",
+      "/file": "http://localhost:8083",
     },
   },
 });

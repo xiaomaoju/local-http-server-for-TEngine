@@ -26,6 +26,8 @@ servers.txt
 *.key
 *.p12
 *.pfx
+*.keystore
+*.jks
 
 # Offline installer source defaults; customize the copies in the delivery package
 !/server/offline/install.env
@@ -58,6 +60,9 @@ servers.txt
 *.AppImage
 *.deb
 *.rpm
+*.apk
+*.aab
+*.ipa
 
 # IDE
 .vscode/

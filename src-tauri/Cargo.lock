@@ -4665,7 +4665,7 @@ dependencies = [
 
 [[package]]
 name = "tengine-http-server"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "axum",
  "chrono",
@@ -4680,6 +4680,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -4687,6 +4688,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-websocket",
  "tokio",
+ "tokio-util",
  "tower-http 0.5.2",
  "urlencoding",
  "uuid",

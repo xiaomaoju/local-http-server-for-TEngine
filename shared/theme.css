@@ -87,11 +87,13 @@ body {
 .ui-dialog button,
 .ui-dialog input,
 .ui-dialog select,
+.local-resources button,
 .ui-button {
   font: inherit;
 }
 .ui-workspace button,
 .ui-dialog button,
+.local-resources button,
 .ui-button {
   height: 32px;
   border: 1px solid var(--control-border);
@@ -111,11 +113,13 @@ body {
 }
 .ui-workspace button:hover:not(:disabled),
 .ui-dialog button:hover:not(:disabled),
+.local-resources button:hover:not(:disabled),
 .ui-button:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 .ui-workspace button:disabled,
-.ui-dialog button:disabled {
+.ui-dialog button:disabled,
+.local-resources button:disabled {
   cursor: not-allowed;
   opacity: 1;
   color: var(--disabled-ink);
@@ -123,23 +127,26 @@ body {
   border-color: var(--line);
 }
 .ui-workspace .primary,
-.ui-dialog .primary {
+.ui-dialog .primary,
+.local-resources .primary {
   background: var(--brand);
   color: var(--brand-ink);
   border-color: var(--brand);
   font-weight: 600;
 }
 .ui-workspace .primary:hover:not(:disabled),
-.ui-dialog .primary:hover:not(:disabled) {
+.ui-dialog .primary:hover:not(:disabled),
+.local-resources .primary:hover:not(:disabled) {
   filter: brightness(1.06);
   background: var(--brand);
 }
 .ui-workspace .danger,
-.ui-dialog .danger {
+.ui-dialog .danger,
+.local-resources .danger {
   color: var(--bad);
 }
 .ui-workspace .ui-action.danger:not(:disabled),
-.ui-dialog .ui-action.danger:not(:disabled) { border-color: transparent; background: var(--danger-tint); }
+.ui-dialog .ui-action.danger:not(:disabled), .local-resources .ui-action.danger:not(:disabled) { border-color: transparent; background: var(--danger-tint); }
 .ui-workspace .quiet,
 .ui-dialog .quiet {
   border-color: transparent;
@@ -921,3 +928,5 @@ body {
 @media (max-width: 1000px) { .ui-client-log-toolbar .ui-log-context { display: none; } }
 @media (max-width: 600px) { .ui-log-connection { display: none; } .ui-log-context { max-width: 96px; } }
 @media (pointer: coarse) { .ui-client-logs button { height: 44px; } }
+
+.ui-apk-directory { min-width: 0; overflow-wrap: anywhere; }

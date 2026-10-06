@@ -162,6 +162,123 @@ impl Fixture {
             .unwrap();
         self.app.clone().oneshot(req).await.unwrap().status()
     }
+    async fn typed_project(&self, token: &str, name: &str, kind: &str) -> Value {
+        let platforms = if kind == "files" { vec!["Any"] } else { vec!["Android"] };
+        let (status, project) = self.call("POST", "/api/projects", token, Some(json!({"project_name": name, "project_type": kind, "package_name": "DefaultPackage", "platforms": platforms})), None).await;
+        assert_eq!(status, StatusCode::OK, "{project}");
+        project
+    }
+    async fn upload_many(&self, token: &str, id: &str, platform: &str, version: &str, files: &[(&str, &str)]) -> StatusCode {
+        let mut body = format!("--boundary\r\nContent-Disposition: form-data; name=\"platform\"\r\n\r\n{platform}\r\n--boundary\r\nContent-Disposition: form-data; name=\"version\"\r\n\r\n{version}\r\n");
+        for (name, contents) in files {
+            body.push_str(&format!("--boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n{contents}\r\n"));
+        }
+        body.push_str("--boundary--\r\n");
+        let request = Request::builder().method("POST").uri(format!("/api/projects/{id}/project-versions/v1/upload")).header("Authorization", format!("Bearer {token}")).header("Content-Type", "multipart/form-data; boundary=boundary").body(Body::from(body)).unwrap();
+        self.app.clone().oneshot(request).await.unwrap().status()
+    }
+    async fn publish(&self, token: &str, id: &str, platform: &str, version: &str, unpublish: bool) -> StatusCode {
+        let (_, project) = self.call("GET", &format!("/api/projects/{id}"), token, None, None).await;
+        self.call("PUT", &format!("/api/projects/{id}/project-versions/v1/versions/{version}/activate?platform={platform}"), token, Some(json!({"unpublish":unpublish})), project["revision"].as_i64()).await.0
+    }
+    async fn download(&self, method: &str, path: &str) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+        let response = self.app.clone().oneshot(Request::builder().method(method).uri(path).body(Body::empty()).unwrap()).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        (status, headers, to_bytes(response.into_body(), 4096).await.unwrap().to_vec())
+    }
+}
+
+#[tokio::test]
+async fn typed_namespaces_keep_shared_names_and_permissions_isolated() {
+    let f = Fixture::new().await;
+    let alice = f.login("alice").await;
+    let bob = f.login("bob").await;
+    let bundle = f.typed_project(&alice, "RollCall", "bundle").await;
+    let apk = f.typed_project(&bob, "RollCall", "apk").await;
+    let files = f.typed_project(&bob, "RollCall", "files").await;
+    let bid = bundle["id"].as_str().unwrap();
+    let aid = apk["id"].as_str().unwrap();
+    let fid = files["id"].as_str().unwrap();
+    assert_ne!(bid, aid);
+    assert_ne!(aid, fid);
+    for kind in ["bundle", "apk", "files"] {
+        assert_eq!(f.call("POST", "/api/projects", &alice, Some(json!({"project_name":"RollCall", "project_type":kind,"package_name":"DefaultPackage", "platforms":if kind == "files" {vec!["Any"]} else {vec!["Android"]}})), None).await.0, StatusCode::CONFLICT);
+    }
+    assert_eq!(f.upload_many(&alice, fid, "Any", "a", &[("manual.pdf", "denied")]).await, StatusCode::NOT_FOUND);
+    assert_eq!(f.upload(&alice, bid, "a", "catalog.json", "bundle").await, StatusCode::OK);
+    assert_eq!(f.upload_many(&bob, aid, "Android", "69", &[("catalog.json", "apk-catalog"), ("flip.apk", "apk-bytes")]).await, StatusCode::OK);
+    assert_eq!(f.upload_many(&bob, fid, "Any", "a", &[("catalog.json", "files"), ("说明", "中文"), ("empty", "")]).await, StatusCode::OK);
+    for (token, id, platform, version) in [(&alice,bid,"Android","a"),(&bob,aid,"Android","69"),(&bob,fid,"Any","a")] {
+        assert_eq!(f.publish(token,id,platform,version,false).await,StatusCode::OK);
+    }
+    for (path, contents) in [("/res/v1/RollCall/Android/catalog.json", "bundle"),("/appversion/v1/RollCall/catalog.json", "apk-catalog"),("/file/v1/RollCall/catalog.json", "files"),("/file/v1/RollCall/%E8%AF%B4%E6%98%8E", "中文")] {
+        let (status, _, body) = f.download("GET", path).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(body, contents.as_bytes());
+    }
+    let (status, headers, body) = f.download("HEAD", "/file/v1/RollCall/empty").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["content-length"], "0");
+    assert!(headers.contains_key("content-disposition"));
+    assert!(body.is_empty());
+    for path in [format!("/res/{aid}/v1/Android/catalog.json"), "/appversion/v1/RollCall/Android/catalog.json".into(), "/file/v1/RollCall/Any/catalog.json".into(), "/file/v1/RollCall/%2e%2e%2fescape".into()] {
+        assert_eq!(f.download("GET", &path).await.0,StatusCode::NOT_FOUND,"{path}");
+    }
+    assert_eq!(f.download("POST", "/file/v1/RollCall/catalog.json").await.0,StatusCode::METHOD_NOT_ALLOWED);
+    let (_, logs) = f.call("GET", "/api/resource-logs", &alice, None, None).await;
+    assert!(logs.as_array().unwrap().iter().all(|log| log["project_id"] == bid));
+    let other = f.typed_project(&bob, "Other", "files").await;
+    assert_eq!(f.call("PUT", &format!("/api/projects/{}", other["id"].as_str().unwrap()), &bob, Some(json!({"project_name":"RollCall","project_type":"files"})),Some(1)).await.0,StatusCode::CONFLICT);
+    assert_eq!(f.call("PUT", &format!("/api/projects/{aid}"), &bob, Some(json!({"project_name":"RollCall","project_type":"files"})),Some(3)).await.0,StatusCode::BAD_REQUEST);
+    // Old rows without project_type retain Bundle name and UUID routes.
+    sqlx::query("UPDATE projects SET config=json_remove(config, '$.project_type') WHERE id=?").bind(bid).execute(&f.state.db).await.unwrap();
+    assert_eq!(f.download("GET", "/res/v1/RollCall/Android/catalog.json").await.0,StatusCode::OK);
+    assert_eq!(f.download("GET", &format!("/res/{bid}/v1/Android/catalog.json")).await.0,StatusCode::OK);
+}
+
+#[tokio::test]
+async fn apk_publications_keep_raw_catalog_and_immutable_historical_downloads() {
+    use sha2::Digest;
+    let f = Fixture::new().await;
+    let alice = f.login("alice").await;
+    let project = f.typed_project(&alice,"ZFlip5","apk").await;
+    let id = project["id"].as_str().unwrap();
+    let catalog = format!(" {{\n  \"schemaVersion\":1,\"versionCode\":69,\"apkPath\":\"releases/69/flip.apk\",\"apkSize\":5,\"sha256\":\"{:x}\"\n}}\n", sha2::Sha256::digest(b"apk-A"));
+    assert_eq!(f.upload_many(&alice,id,"Android","69",&[("catalog.json", &catalog),("flip.apk","apk-A")]).await,StatusCode::OK);
+    let old_apk = "/appversion/v1/ZFlip5/releases/69/flip.apk";
+    assert_eq!(f.download("GET", old_apk).await.0,StatusCode::NOT_FOUND);
+    assert_eq!(f.publish(&alice,id,"Android","69",false).await,StatusCode::OK);
+    let (status,headers,body) = f.download("GET","/appversion/v1/ZFlip5/catalog.json").await;
+    assert_eq!(status,StatusCode::OK);
+    assert_eq!(headers["cache-control"],"no-store");
+    assert_eq!(body,catalog.as_bytes());
+    for (number,pairs) in [("70",vec![("catalog.json","new"),("next.apk","apk-B")]),("71",vec![("catalog.json","draft"),("draft.apk","draft")])] {
+        assert_eq!(f.upload_many(&alice,id,"Android",number,&pairs).await,StatusCode::OK);
+    }
+    assert_eq!(f.publish(&alice,id,"Android","70",false).await,StatusCode::OK);
+    assert_eq!(f.download("GET",old_apk).await.2,b"apk-A");
+    assert_eq!(f.download("GET","/appversion/v1/ZFlip5/catalog.json").await.2,b"new");
+    assert_eq!(f.download("GET","/appversion/v1/ZFlip5/releases/71/draft.apk").await.0,StatusCode::NOT_FOUND);
+    assert_eq!(f.download("GET","/appversion/v1/ZFlip5/releases/69/catalog.json").await.0,StatusCode::NOT_FOUND);
+    assert_eq!(f.publish(&alice,id,"Android","70",true).await,StatusCode::OK);
+    assert_eq!(f.download("GET","/appversion/v1/ZFlip5/catalog.json").await.0,StatusCode::NOT_FOUND);
+    assert_eq!(f.download("HEAD",old_apk).await.1["content-length"],"5");
+    assert_eq!(f.publish(&alice,id,"Android","70",false).await,StatusCode::OK);
+    let (_, current) = f.call("GET",&format!("/api/projects/{id}"),&alice,None,None).await;
+    assert_eq!(f.call("DELETE",&format!("/api/projects/{id}/project-versions/v1/versions/69?platform=Android"),&alice,None,current["revision"].as_i64()).await.0,StatusCode::OK);
+    assert_eq!(f.upload_many(&alice,id,"Android","69",&[("catalog.json","overwrite"),("flip.apk","overwrite")]).await,StatusCode::CONFLICT);
+    let (_, current) = f.call("GET",&format!("/api/projects/{id}"),&alice,None,None).await;
+    assert_eq!(f.call("PUT",&format!("/api/projects/{id}/project-versions/v1/platforms/Android/access"),&alice,Some(json!({"enabled":false})),current["revision"].as_i64()).await.0,StatusCode::OK);
+    assert_eq!(f.download("GET","/appversion/v1/ZFlip5/catalog.json").await.0,StatusCode::FORBIDDEN);
+    assert_eq!(f.download("GET","/appversion/v1/ZFlip5/releases/70/next.apk").await.0,StatusCode::FORBIDDEN);
+    for (number,pairs) in [("72",vec![("catalog.json","missing")]),("73",vec![("catalog.json","x"),("a.apk","a"),("b.apk","b")]),("r74",vec![("catalog.json","x"),("a.apk","a")])] {
+        assert_eq!(f.upload_many(&alice,id,"Android",number,&pairs).await,StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(std::fs::read_dir(f.root.join("staging")).unwrap().count(),0);
+    let reloaded = Arc::new(AppState::new(f.state.server_config.clone(),f.state.db.clone()).await);
+    let project = db::project(&reloaded.db,id).await.unwrap();
+    assert_eq!(project.project_versions[0].platform_settings["Android"].published_releases, ["69","70"]);
 }
 #[tokio::test]
 async fn administrator_can_distinguish_shared_projects_from_system_access() {
@@ -885,4 +1002,108 @@ async fn request_logs_report_aborted_and_truncated_streams_and_are_bounded() {
     assert_eq!(log.outcome, "failed");
     for _ in 0..510 { resource_logs::publish(&f.state, resource_logs::ResourceLog::new("GET", "/res/invalid"), 404, "failed", "无效请求"); }
     assert_eq!(f.state.resource_history.lock().unwrap().len(), 500);
+}
+
+impl Fixture {
+    async fn attachment_upload(&self, token: &str, id: &str, rev: i64, files: &[(&str, &str)], complete: bool) -> (StatusCode, Value) {
+        let mut body = String::new();
+        for (name, contents) in files { body.push_str(&format!("--attachment\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n{contents}\r\n")); }
+        if complete { body.push_str("--attachment--\r\n"); }
+        let request = Request::builder().method("POST").uri(format!("/api/projects/{id}/project-versions/v1/attachments")).header("Authorization",format!("Bearer {token}")).header("If-Match",rev).header("Content-Type","multipart/form-data; boundary=attachment").body(Body::from(body)).unwrap();
+        let response = self.app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
+}
+
+#[tokio::test]
+async fn attachments_update_independently_and_preserve_open_readers_and_release_state() {
+    let fixture = Fixture::new().await;
+    let token = fixture.login("alice").await;
+    let project = fixture.typed_project(&token, "Tutorial", "apk").await;
+    let id = project["id"].as_str().unwrap();
+    let route = format!("/api/projects/{id}/project-versions/v1/attachments");
+    let revision = project["revision"].as_i64().unwrap();
+    let (status, first) = fixture.attachment_upload(&token, id, revision, &[("教程.html", "<h1>old</h1>"), ("style.css", "h1{color:red}"), ("manual.pdf", "pdf")], true).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert!(first["project"]["project_versions"][0]["platform_settings"]["Android"]["active_bundle"].is_null());
+    let public = "/appversion/v1/Tutorial/docs/%E6%95%99%E7%A8%8B.html";
+    let old_response = fixture.app.clone().oneshot(Request::builder().uri(public).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(old_response.status(), StatusCode::OK);
+    assert_eq!(old_response.headers()["content-type"], "text/html; charset=utf-8");
+    assert_eq!(old_response.headers()["cache-control"], "no-store");
+    assert!(old_response.headers()["content-disposition"].to_str().unwrap().starts_with("inline"));
+    assert_eq!(old_response.headers()["content-security-policy"], crate::attachment_store::DOCUMENT_CSP);
+    let snapshot = first["snapshot"].as_str().unwrap();
+    let store = crate::attachment_store::Store::new(storage::Storage::new(fixture.state.server_config.resources_dir()).project_version_dir(id, "v1").unwrap());
+    let rev = first["project"]["revision"].as_i64().unwrap();
+    let (status, next) = fixture.attachment_upload(&token, id, rev, &[("教程.html", "<h1>new</h1>")], true).await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["files"].as_array().unwrap().len(), 3);
+    assert!(store.snapshot_dir(snapshot).unwrap().exists());
+    assert_eq!(to_bytes(old_response.into_body(), usize::MAX).await.unwrap(), "<h1>old</h1>");
+    assert!(!store.snapshot_dir(snapshot).unwrap().exists());
+    let updated = fixture.app.clone().oneshot(Request::builder().uri(public).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(to_bytes(updated.into_body(), usize::MAX).await.unwrap(), "<h1>new</h1>");
+    let head = fixture.app.clone().oneshot(Request::builder().method("HEAD").uri(public).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(head.status(), StatusCode::OK); assert_eq!(head.headers()["content-length"], "12");
+    assert!(to_bytes(head.into_body(), usize::MAX).await.unwrap().is_empty());
+    let pdf = fixture.app.clone().oneshot(Request::builder().uri("/appversion/v1/Tutorial/docs/manual.pdf").body(Body::empty()).unwrap()).await.unwrap();
+    assert!(pdf.headers()["content-disposition"].to_str().unwrap().starts_with("attachment"));
+    let rev = next["project"]["revision"].as_i64().unwrap();
+    assert_eq!(fixture.attachment_upload(&token,id,rev-1,&[("bad.txt","stale")],true).await.0, StatusCode::CONFLICT);
+    assert_eq!(fixture.attachment_upload(&token,id,rev,&[("broken.html","partial")],false).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(fixture.call("GET",&route,&token,None,None).await.1["snapshot"], next["snapshot"]);
+    let (status, removed) = fixture.call("DELETE",&format!("{route}/style.css"),&token,None,Some(rev)).await;
+    assert_eq!(status,StatusCode::OK,"{removed}");
+    assert_eq!(removed["files"].as_array().unwrap().len(),2);
+    let missing = fixture.app.clone().oneshot(Request::builder().uri("/appversion/v1/Tutorial/docs/style.css").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let rev = removed["project"]["revision"].as_i64().unwrap();
+    let (status, _) = fixture.call("PUT",&format!("/api/projects/{id}/project-versions/v1/platforms/Android/access"),&token,Some(json!({"enabled":false})),Some(rev)).await;
+    assert_eq!(status,StatusCode::OK);
+    assert_eq!(fixture.app.clone().oneshot(Request::builder().uri(public).body(Body::empty()).unwrap()).await.unwrap().status(),StatusCode::FORBIDDEN);
+    let mut orphan = store.prepare(None,&[],None).unwrap(); orphan.commit();
+    crate::attachments::cleanup(&fixture.state).await.unwrap();
+    assert!(!store.snapshot_dir(&orphan.id).unwrap().exists());
+    assert!(store.snapshot_dir(removed["snapshot"].as_str().unwrap()).unwrap().exists());
+    let reloaded = db::project(&fixture.state.db,id).await.unwrap();
+    assert_eq!(reloaded.project_versions[0].attachment_snapshot.as_deref(),removed["snapshot"].as_str());
+}
+
+#[tokio::test]
+async fn attachments_enforce_permissions_types_names_csrf_and_failed_save_rollback() {
+    let fixture = Fixture::new().await;
+    let alice = fixture.login("alice").await; let bob = fixture.login("bob").await;
+    let project = fixture.typed_project(&alice, "Attachments", "apk").await;
+    let id = project["id"].as_str().unwrap(); let rev = project["revision"].as_i64().unwrap();
+    let route = format!("/api/projects/{id}/project-versions/v1/attachments");
+    assert_eq!(fixture.call("GET",&route,"",None,None).await.0,StatusCode::UNAUTHORIZED);
+    assert_eq!(fixture.call("GET",&route,&bob,None,None).await.0,StatusCode::NOT_FOUND);
+    assert_eq!(fixture.attachment_upload(&bob,id,rev,&[("index.html","x")],true).await.0,StatusCode::NOT_FOUND);
+    for files in [vec![("test.apk","x")], vec![("CATALOG.JSON","x")], vec![("assets/x.js","x")], vec![("../x.html","x")], vec![("a.html","a"),("A.html","b")]] {
+        assert_eq!(fixture.attachment_upload(&alice,id,rev,&files,true).await.0,StatusCode::BAD_REQUEST);
+    }
+    let bundle = fixture.typed_project(&alice,"NoAttachments","bundle").await;
+    assert_eq!(fixture.attachment_upload(&alice,bundle["id"].as_str().unwrap(),bundle["revision"].as_i64().unwrap(),&[("a.html","x")],true).await.0,StatusCode::BAD_REQUEST);
+    for path in ["/appversion/v1/Attachments/docs/%2e%2e%2fx", "/appversion/v1/Attachments/docs/folder/a.html", "/appversion/v1/Attachments/docs/catalog.json"] {
+        assert_eq!(fixture.app.clone().oneshot(Request::builder().uri(path).body(Body::empty()).unwrap()).await.unwrap().status(),StatusCode::NOT_FOUND);
+    }
+    let (_, login) = fixture.call("POST","/api/auth/login","",Some(json!({"username":"alice","password":"initial-password","client":"web"})),None).await;
+    assert!(login["csrf"].is_string());
+    // A session cookie still needs a CSRF header for all attachment mutations.
+    let login_response = fixture.app.clone().oneshot(Request::builder().method("POST").uri("/api/auth/login").header("Content-Type","application/json").body(Body::from(json!({"username":"alice","password":"initial-password","client":"web"}).to_string())).unwrap()).await.unwrap();
+    let cookie = login_response.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+    let rejected = fixture.app.clone().oneshot(Request::builder().method("DELETE").uri(format!("{route}/index.html")).header("Cookie",cookie).header("If-Match",rev).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(rejected.status(),StatusCode::FORBIDDEN);
+    sqlx::query("CREATE TRIGGER fail_attachment_save BEFORE UPDATE ON projects BEGIN SELECT RAISE(FAIL, 'simulated storage failure'); END;").execute(&fixture.state.db).await.unwrap();
+    assert!(!fixture.attachment_upload(&alice,id,rev,&[("index.html","x")],true).await.0.is_success());
+    let root = storage::Storage::new(fixture.state.server_config.resources_dir()).project_version_dir(id,"v1").unwrap().join("_attachments");
+    assert_eq!(std::fs::read_dir(root).unwrap().count(),0);
+    assert!(fixture.call("GET",&route,&alice,None,None).await.1["snapshot"].is_null());
+    sqlx::query("DROP TRIGGER fail_attachment_save").execute(&fixture.state.db).await.unwrap();
+    sqlx::query("CREATE TRIGGER fail_attachment_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(FAIL, 'simulated audit failure'); END;").execute(&fixture.state.db).await.unwrap();
+    assert!(!fixture.attachment_upload(&alice,id,rev,&[("single.html","standalone")],true).await.0.is_success());
+    assert!(fixture.call("GET",&route,&alice,None,None).await.1["snapshot"].is_null());
 }

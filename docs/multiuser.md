@@ -46,7 +46,7 @@ Compose 默认使用新的 `tengine-management-data` 卷；原 `tengine-data` �
 - `/api/admin/users/:id`：PUT `{role,enabled}`；DELETE `{transfers:{project_id:recipient_user_id}}`。
 - `PUT /api/admin/users/:id/password`：`{password}`，下次登录必须改密。
 - `GET /api/users/lookup?username=...`：精确查找有效用户，仅返回 ID 和用户名。
-- `POST /api/projects`：`{project_name,project_version,platforms,package_name}`，原子创建初始配置。
+- `POST /api/projects`：`{project_name,project_type,project_version,platforms,package_name}`，原子创建初始配置。类型缺省为 `bundle`，创建后固定；APK/普通文件的包名可省略，平台固定为 `Android`/`Any`。
 - `GET /api/projects`：授权项目；GET `/api/projects/:id`：当前配置。
 - 项目配置、成员、版本、发布及删除写请求需 `If-Match: <revision>`；冲突为 409。上传通过开始/提交时的修订与权限复查保证安全，不覆盖现有 Bundle。
 - `/api/projects/:id/members`：GET 成员；POST `{user_id}`；DELETE `/members/:user_id` 移除。
@@ -56,7 +56,7 @@ Compose 默认使用新的 `tengine-management-data` 卷；原 `tengine-data` �
 - `POST /api/auth/ws-ticket` 获取 30 秒一次性票据；`/api/ws/logs?ticket=...` 建立授权日志连接。权限变化通知客户端重新读取授权数据。
 - `/api/settings/protocol-access` 仅管理员访问，控制资源下载协议，不关闭管理入口。
 
-游戏公开下载路径为 `/res/{project_version}/{project_name}/{platform}/{file}`，例如 `/res/v1/RollCall/Android/DefaultPackage.version`。客户端复制的目录为 `/res/v1/RollCall/Android/`。内部管理和磁盘存储仍使用 UUID；已有 `/res/{project_id}/{project_version}/{platform}/{file}` 链接继续可用，不移动账号、数据库或资源目录。项目名称区分大小写，新建和改名时全局查重且校验路径字符；改名会改变名称下载地址，更新 Unity 配置后使用。升级前已有的同名项目保留，名称路由返回 409 而不会选取任意项目，改成不同名称后恢复；UUID 链接不受同名影响。平台下载开关仍有效。仅已发布 Bundle 提供下载；上传成功不会自动发布。
+Bundle 公开下载路径为 `/res/{project_version}/{project_name}/{platform}/{file}`，例如 `/res/v1/RollCall/Android/DefaultPackage.version`。内部管理和磁盘存储仍使用 UUID，旧 UUID 链接仅兼容 Bundle，不移动已有数据。项目名称区分大小写，同类型内全局查重，不同类型可同名；旧配置缺少类型时按 Bundle 处理，同类型已有重名的名称路由仍返回 409。APK 使用 `/appversion/{project_version}/{project_name}/catalog.json` 及 `releases/{versionCode}/{apk}`，普通文件使用 `/file/{project_version}/{project_name}/{file}`，均省略平台层。改名会改变下载地址，下载开关仍有效。发布、APK 历史链接和迁移规则见 [APK 更新说明](apk-updates.md)。
 
 `GET /api/resource-logs` 返回当前账号有权查看的最近资源请求；同一日志通过已有 WebSocket 推送。记录请求时间、项目、GET/HEAD、路径（不含查询参数）、实际 HTTP 状态码及结果。已知项目日志只对所有者、共享成员和管理员开放；不能归属项目的无效请求仅管理员可见。服务端保留最近 500 条于内存，重启清空，不向 SQLite 持续写入每个资源请求。前端在连接或重连时补取历史，Web 与桌面底部日志面板显示“资源”来源及 HTTP 状态，权限变化清除旧缓存。
 

@@ -14,7 +14,7 @@ codex
 
 ## 依赖与安装
 
-以下命令均从仓库根目录运行。Node 20 与现有 CI / Docker 构建一致；远程服务的 Dockerfile 使用 Rust 1.90，桌面 CI 使用 stable。桌面开发还需要当前操作系统对应的 Tauri 原生构建依赖，参见 [README](../README.md#环境要求) 和 `.github/workflows/release.yml`。
+以下命令均从仓库根目录运行。Node 20 与现有 CI / Docker 构建一致；远程服务的 Dockerfile 使用 Rust 1.90，桌面 CI 使用 stable。桌面开发还需要当前操作系统对应的 Tauri 原生构建依赖，参见 [技术维护约定](../AGENTS.md#环境要求) 和 `.github/workflows/release.yml`。
 
 ```bash
 npm ci
@@ -50,7 +50,7 @@ cargo build --locked --manifest-path server/Cargo.toml
 cargo run --locked --manifest-path server/Cargo.toml
 ```
 
-本地测试将 `DATA_DIR` 指向仓库内独立的 `Cache/debug/server-data`，避免使用已有资源目录。环境变量定义见 [README](../README.md#环境变量)；原生 `cargo run` 不会自动加载 `.env`，Compose 的 `.env` 流程不能直接套用。
+本地测试将 `DATA_DIR` 指向仓库内独立的 `Cache/debug/server-data`，避免使用已有资源目录。环境变量定义见 [技术维护约定](../AGENTS.md#环境变量)；原生 `cargo run` 不会自动加载 `.env`，Compose 的 `.env` 流程不能直接套用。
 
 默认服务地址是 `http://localhost:8083`。需要 Web 热重载时，在另一个终端执行：
 
@@ -91,13 +91,13 @@ Vite 配置端口为 5174，`/api` 与 `/res` 代理到 `localhost:8083`。若�
 - 根 `package-lock.json` 中的应用自身版本
 - `server/offline/docker-compose.yml` 中的版本镜像标签
 
-同步脚本可重复运行，不更新第三方依赖。`npm run check-version` 只检查、不改文件；发现版本不一致时失败。`web-admin/package.json` 与它的锁文件仍独立维护，本次同样标记为 `2.0.0`。
+同步脚本可重复运行，不更新第三方依赖。`npm run check-version` 只检查、不改文件；发现版本不一致时失败。`web-admin/package.json` 与它的锁文件仍独立维护，本次同样标记为 `2.1.0`。
 
 `npm version <版本号>` 会触发同步和暂存相关文件，并通常创建 Git 提交和标签。希望手动提交时，编辑根 `package.json` 后单独运行同步和检查命令，不使用 `npm version`。
 
 GitHub Release 由 `.github/workflows/release.yml` 统一编排：
 
-1. 推送 `v2.0.0` 这样的版本标签，或手动运行 **Build & Release** 并填写已存在的标签。
+1. 推送 `v2.1.0` 这样的版本标签，或手动运行 **Build & Release** 并填写已存在的标签。
 2. 校验标签等于 `v` 加根版本，且检出的提交就是标签提交；未同步的版本文件会阻止发布。
 3. 并行构建 Windows x64（NSIS / MSI / 便携 ZIP）、macOS arm64 / x64（DMG / 应用 ZIP）、Linux x64（deb / AppImage）。
 4. 调用 `.github/workflows/docker.yml` 构建 Linux amd64 镜像，检查显式初始化、已有数据库启动和 Web 页面，再组装含部署脚本与模板的 `TEngineHttpV2.zip`。安装包不含真实配置或数据。
@@ -105,7 +105,7 @@ GitHub Release 由 `.github/workflows/release.yml` 统一编排：
 
 Docker 工作流仅作为可复用构建调用，不再独立创建 Release。默认令牌仅有读取权限，最终发布任务单独获得 `contents: write`；不需要个人访问令牌。当前未配置 Windows 代码签名或 Apple Developer ID / 公证，macOS 使用 ad-hoc 签名。
 
-提交并推送源码后，手动执行 `git tag v2.0.0` 与 `git push origin v2.0.0` 才会触发本次发布。仅配置工作流或暂存文件不会创建远端 Release。部署细节见 [README](../README.md#远程服务docker) 和 [离线安装说明](../server/offline/README.md)。
+提交并推送源码后，手动执行 `git tag v2.1.0` 与 `git push origin v2.1.0` 才会触发本次发布。仅配置工作流或暂存文件不会创建远端 Release。部署细节见 [技术维护约定](../AGENTS.md#远程服务docker) 和 [离线安装说明](../server/offline/README.md)。
 
 ## Claude Code 迁移说明
 

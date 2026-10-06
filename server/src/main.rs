@@ -5,6 +5,11 @@ mod db;
 mod serve;
 mod resource_logs;
 mod storage;
+mod attachments;
+#[path = "../../shared/attachments.rs"]
+mod attachment_store;
+#[path = "../../shared/resources.rs"]
+mod resources;
 #[cfg(test)]
 mod tests;
 mod users;
@@ -98,6 +103,7 @@ async fn main() {
     let tls = (config.tls_cert.clone(), config.tls_key.clone());
     let https_port = config.https_port;
     let state = Arc::new(AppState::new(config, pool).await);
+    if let Err(error) = attachments::cleanup(&state).await { tracing::warn!("附件孤立快照清理未完成，将在下次启动时重试：{}", error.1); }
     let listener = tokio::net::TcpListener::bind(http_addr)
         .await
         .expect("HTTP bind failed");

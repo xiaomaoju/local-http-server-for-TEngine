@@ -1,10 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
-async function localFixture(page: Page) {
-  await page.addInitScript(() => {
+async function localFixture(page: Page, apk = false) {
+  await page.addInitScript(apk => {
     const state = {
       projects: ["A", "B"].map((id, i) => ({
         id,
         project_name: `本地${id}`,
+        project_type: apk ? "apk" : "bundle",
+        attachment_snapshot: null as string | null,
         bundles_dir: "/test/bundles",
         port: 18100 + i,
         platforms: ["Android"],
@@ -19,6 +21,7 @@ async function localFixture(page: Page) {
       releaseList: undefined as undefined | (() => void),
       releaseSave: undefined as undefined | (() => void),
       saved: undefined as any,
+      attachments: [] as any[],
     };
     (window as any).localTest = state;
     (window as any).__TAURI_INTERNALS__ = {
@@ -31,6 +34,19 @@ async function localFixture(page: Page) {
         });
         if (cmd === "get_projects") return structuredClone(state.projects);
         if (cmd === "get_running_servers" || cmd === "get_local_ips") return [];
+        if (cmd === "list_local_releases") return [];
+        if (cmd === "plugin:dialog|open") return args.options?.directory ? "/selected/tutorials" : ["/selected/tutorial.html"];
+        if (cmd === "read_attachment_directory") return [{path:"/selected/tutorial.html",name:"tutorial.html",size:16}];
+        if (cmd === "describe_upload_files") return [{path:"/selected/tutorial.html",name:"tutorial.html",size:16}];
+        if (cmd === "list_local_attachments" || cmd === "upload_local_attachments" || cmd === "delete_local_attachment") {
+          const project = state.projects.find(p=>p.id === args.projectId)!;
+          if (cmd !== "list_local_attachments") {
+            if (args.expectedSnapshot !== project.attachment_snapshot) throw new Error("附件已变化");
+            state.attachments = cmd === "upload_local_attachments" ? [{name:"tutorial.html",size:16,modified_timestamp:1}] : [];
+            project.attachment_snapshot = String(Date.now());
+          }
+          return {files:structuredClone(state.attachments),snapshot:project.attachment_snapshot,project:structuredClone(project)};
+        }
         if (cmd === "get_resource_version")
           return [{ platform: "Android", latest: "r1", synced: null }];
         if (cmd === "list_versions") {
@@ -69,10 +85,10 @@ async function localFixture(page: Page) {
         throw new Error("Unexpected test command: " + cmd);
       },
     };
-  });
+  }, apk);
   await page.goto("http://127.0.0.1:1431");
   await expect(
-    page.getByRole("button", { name: "本地A", exact: true }),
+    page.getByRole("button", { name: `本地A · ${apk ? "APP更新" : "Bundle"}`, exact: true }),
   ).toBeVisible();
 }
 
@@ -87,7 +103,7 @@ test("local sync discards a late version response after switching projects", asy
   await expect
     .poll(() => page.evaluate(() => !!(window as any).localTest.releaseList))
     .toBeTruthy();
-  await page.getByRole("button", { name: "本地B", exact: true }).click();
+  await page.getByRole("button", { name: "本地B · Bundle", exact: true }).click();
   await page.evaluate(() => {
     const s = (window as any).localTest;
     s.holdList = false;
@@ -148,4 +164,20 @@ test("local settings cannot be cancelled while saving and running settings are r
   await expect(
     page.getByRole("button", { name: "保存修改", exact: true }),
   ).toBeDisabled();
+});
+
+test("local APP tutorial attachments use isolated commands and do not require APK releases", async ({page}) => {
+  await localFixture(page,true);
+  await page.getByRole("button",{name:"教程附件",exact:true}).click();
+  const dialog = page.getByRole("dialog",{name:"教程附件",exact:true});
+  await dialog.getByRole("radio",{name:"选择文件",exact:true}).check();
+  await dialog.getByRole("button",{name:"选择附件",exact:true}).click();
+  await dialog.getByRole("button",{name:"确认上传并生效"}).click();
+  const row = dialog.getByRole("row").filter({has:page.getByRole("cell",{name:"tutorial.html",exact:true})});
+  await expect(row.getByRole("button",{name:"打开网页"})).toBeDisabled();
+  await expect(row.getByRole("button",{name:"复制地址"})).toHaveAttribute("title","http://127.0.0.1:18100/appversion/v1/%E6%9C%AC%E5%9C%B0A/docs/tutorial.html");
+  expect(await page.evaluate(()=>(window as any).localTest.calls.find((call:any)=>call.cmd === "upload_local_attachments").args)).toEqual({projectId:"A",projectVersion:"v1",expectedSnapshot:null,paths:["/selected/tutorial.html"]});
+  await row.getByRole("button",{name:"删除",exact:true}).click();
+  await page.getByRole("dialog",{name:"删除教程附件？"}).getByRole("button",{name:"确认删除"}).click();
+  await expect(dialog.getByRole("cell",{name:"tutorial.html",exact:true})).toHaveCount(0);
 });

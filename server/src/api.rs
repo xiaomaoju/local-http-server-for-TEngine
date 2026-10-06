@@ -1,6 +1,6 @@
 use crate::{
     auth::{self, Auth},
-    config::{PlatformSettings, ProjectConfig, ProjectVersion},
+    config::{PlatformSettings, ProjectConfig, ProjectType, ProjectVersion},
     db::{self, ApiError, ApiResult},
     serve,
     storage::{self, Storage},
@@ -23,6 +23,8 @@ use tower_http::cors::CorsLayer;
 
 pub fn build_router(state: Arc<AppState>, protocol: Protocol) -> Router {
     let protected = Router::new()
+        .route("/api/projects/:id/project-versions/:pver/attachments", get(crate::attachments::list).post(crate::attachments::upload).layer(DefaultBodyLimit::max(512 * 1024 * 1024)))
+        .route("/api/projects/:id/project-versions/:pver/attachments/:name", axum::routing::delete(crate::attachments::delete))
         .route("/api/auth/me", get(auth::me))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/password", put(auth::change_password))
@@ -111,6 +113,8 @@ pub fn build_router(state: Arc<AppState>, protocol: Protocol) -> Router {
             "/res/*path",
             axum::routing::any(serve::serve_resource).layer(CorsLayer::permissive()),
         )
+        .route("/appversion/*path", axum::routing::any(serve::serve_resource).layer(CorsLayer::permissive()))
+        .route("/file/*path", axum::routing::any(serve::serve_resource).layer(CorsLayer::permissive()))
         .fallback(serve::serve_spa)
         .layer(Extension(protocol))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
@@ -124,7 +128,7 @@ fn validate_component(value: &str) -> ApiResult<()> {
         .map(|_| ())
         .map_err(ApiError::bad)
 }
-fn revision(headers: &HeaderMap, project: &ProjectConfig) -> ApiResult<()> {
+pub(crate) fn revision(headers: &HeaderMap, project: &ProjectConfig) -> ApiResult<()> {
     let expected = headers
         .get("If-Match")
         .and_then(|v| v.to_str().ok())
@@ -136,7 +140,7 @@ fn revision(headers: &HeaderMap, project: &ProjectConfig) -> ApiResult<()> {
     }
     Ok(())
 }
-async fn access(state: &AppState, auth: &Auth, id: &str, manage: bool) -> ApiResult<ProjectConfig> {
+pub(crate) async fn access(state: &AppState, auth: &Auth, id: &str, manage: bool) -> ApiResult<ProjectConfig> {
     auth::from_hash(state, &auth.hash).await?;
     Ok(db::authorized(state, &auth.user.id, id, manage).await?.1)
 }
@@ -185,7 +189,11 @@ async fn get_project(
 #[derive(Deserialize)]
 struct ProjectInput {
     project_name: String,
+    #[serde(default)]
+    project_type: Option<ProjectType>,
+    #[serde(default)]
     package_name: String,
+    #[serde(default)]
     platforms: Vec<String>,
     #[serde(default = "initial_version")]
     project_version: String,
@@ -193,12 +201,16 @@ struct ProjectInput {
 fn initial_version() -> String {
     "v1".into()
 }
-fn validate_project(req: &ProjectInput) -> ApiResult<()> {
+fn validate_project(req: &mut ProjectInput, kind: ProjectType) -> ApiResult<()> {
     if req.project_name.trim().is_empty() || req.project_name.chars().count() > 80 {
         return Err(ApiError::bad("项目名称需为 1–80 个字符"));
     }
     validate_component(req.project_name.trim())?;
-    validate_component(&req.package_name)?;
+    if let Some(plat) = kind.fixed_platform() {
+        if !req.platforms.is_empty() && req.platforms != [plat] { return Err(ApiError::bad("此项目类型的平台不可修改")); }
+        req.platforms = vec![plat.into()];
+        req.package_name.clear();
+    } else { validate_component(&req.package_name)?; }
     if req.platforms.is_empty() || req.platforms.len() > 16 {
         return Err(ApiError::bad("请选择至少一个平台"));
     }
@@ -213,6 +225,7 @@ fn validate_project(req: &ProjectInput) -> ApiResult<()> {
 }
 fn new_version(name: String, platforms: &[String]) -> ProjectVersion {
     ProjectVersion {
+        attachment_snapshot: None,
         name,
         platform_settings: platforms
             .iter()
@@ -222,6 +235,7 @@ fn new_version(name: String, platforms: &[String]) -> ProjectVersion {
                     PlatformSettings {
                         access_enabled: true,
                         active_bundle: None,
+                        published_releases: vec![],
                     },
                 )
             })
@@ -231,16 +245,18 @@ fn new_version(name: String, platforms: &[String]) -> ProjectVersion {
 async fn create_project(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<Auth>,
-    Json(req): Json<ProjectInput>,
+    Json(mut req): Json<ProjectInput>,
 ) -> ApiResult<Json<ProjectConfig>> {
-    validate_project(&req)?;
+    let kind = req.project_type.unwrap_or_default();
+    validate_project(&mut req, kind)?;
     validate_component(&req.project_version)?;
     let _guard = state.mutation.lock().await;
     auth::from_hash(&state, &auth.hash).await?;
-    db::check_project_name(&state.db, req.project_name.trim(), "").await?;
+    db::check_project_name(&state.db, kind, req.project_name.trim(), "").await?;
     let p = ProjectConfig {
         id: uuid::Uuid::new_v4().to_string(),
         project_name: req.project_name.trim().into(),
+        project_type: kind,
         owner_id: auth.user.id.clone(),
         project_versions: vec![new_version(req.project_version, &req.platforms)],
         platforms: req.platforms,
@@ -271,14 +287,15 @@ async fn update_project(
     Extension(auth): Extension<Auth>,
     Path(id): Path<String>,
     headers: HeaderMap,
-    Json(req): Json<ProjectInput>,
+    Json(mut req): Json<ProjectInput>,
 ) -> ApiResult<Json<ProjectConfig>> {
-    validate_project(&req)?;
     let _guard = state.mutation.lock().await;
     let mut p = access(&state, &auth, &id, false).await?;
+    if req.project_type.is_some_and(|kind| kind != p.project_type) { return Err(ApiError::bad("项目类型创建后不可修改")); }
+    validate_project(&mut req, p.project_type)?;
     revision(&headers, &p)?;
     if p.project_name != req.project_name.trim() {
-        db::check_project_name(&state.db, req.project_name.trim(), &id).await?;
+        db::check_project_name(&state.db, p.project_type, req.project_name.trim(), &id).await?;
     }
     for v in &p.project_versions {
         for (plat, settings) in &v.platform_settings {
@@ -298,6 +315,7 @@ async fn update_project(
                 .or_insert(PlatformSettings {
                     access_enabled: true,
                     active_bundle: None,
+                    published_releases: vec![],
                 });
         }
     }
@@ -682,15 +700,23 @@ async fn activate_version(
         if files.is_empty() {
             return Err(ApiError::bad("资源版本不存在或为空，无法发布"));
         }
+        if p.project_type != ProjectType::Bundle {
+            p.project_type.validate_version(&ver).map_err(ApiError::bad)?;
+            p.project_type.validate_files(&files.into_iter().map(|f| f.name).collect::<Vec<_>>()).map_err(ApiError::bad)?;
+        }
     }
-    p.project_versions
+    let kind = p.project_type;
+    let settings = p.project_versions
         .iter_mut()
         .find(|v| v.name == pver)
         .unwrap()
         .platform_settings
         .get_mut(&q.platform)
-        .unwrap()
-        .active_bundle = if req.unpublish {
+        .unwrap();
+    if kind == ProjectType::Apk && !req.unpublish && !settings.published_releases.contains(&ver) {
+        settings.published_releases.push(ver.clone());
+    }
+    settings.active_bundle = if req.unpublish {
         None
     } else {
         Some(ver.clone())
@@ -765,6 +791,7 @@ async fn upload_resources(
     mut multipart: Multipart,
 ) -> ApiResult<Json<serde_json::Value>> {
     let initial = access(&state, &auth, &id, false).await?;
+    validate_component(&pver)?;
     let stage = Staging(
         state
             .server_config
@@ -817,6 +844,12 @@ async fn upload_resources(
     let plat = fields
         .get("platform")
         .ok_or_else(|| ApiError::bad("请选择目标平台"))?;
+    if initial.project_type != ProjectType::Bundle && (fields.contains_key("base_version") || fields.contains_key("copy_files")) {
+        return Err(ApiError::bad("APK 和普通文件仅支持完整上传"));
+    }
+    if initial.project_type == ProjectType::Apk && fields.get("version").is_none_or(|v| v.is_empty()) {
+        return Err(ApiError::bad("请填写 APK 的 versionCode 作为发布编号"));
+    }
     let version = fields
         .get("version")
         .filter(|v| !v.is_empty())
@@ -828,11 +861,14 @@ async fn upload_resources(
                 &uuid::Uuid::new_v4().simple().to_string()[..8]
             )
         });
-    validate_component(&version)?;
+    initial.project_type.validate_version(&version).map_err(ApiError::bad)?;
     platform(&initial, &pver, plat)?;
     let _guard = state.mutation.lock().await;
     let mut p = access(&state, &auth, &id, false).await?;
-    platform(&p, &pver, plat)?;
+    let settings = platform(&p, &pver, plat)?;
+    if p.project_type == ProjectType::Apk && settings.published_releases.contains(&version) {
+        return Err(ApiError::conflict("此 APK 编号曾经发布，不能覆盖或复用"));
+    }
     if p.revision != initial.revision {
         return Err(ApiError::conflict(
             "上传期间项目发生变化，请确认最新配置后重试",
@@ -865,6 +901,10 @@ async fn upload_resources(
     if names.is_empty() {
         return Err(ApiError::bad("请选择至少一个文件"));
     }
+    if p.project_type != ProjectType::Bundle {
+        p.project_type.validate_files(&names.iter().cloned().collect::<Vec<_>>()).map_err(ApiError::bad)?;
+    }
+    let file_count = names.len();
     tokio::fs::create_dir_all(destination.parent().unwrap()).await?;
     tokio::fs::rename(&stage.0, &destination).await?;
     if let Err(e) = db::save(&state.db, &mut p).await {
@@ -877,11 +917,11 @@ async fn upload_resources(
         Some(&id),
         "upload",
         &format!("{pver}/{plat}/{version}"),
-        &format!("上传完成，尚未发布：{} 个文件", names.len()),
+        &format!("上传完成，尚未发布：{} 个文件", file_count),
     )
     .await?;
     Ok(Json(
-        serde_json::json!({"success": true, "version": version, "platform": plat, "file_count": names.len(), "copied_count": copy_files.len(), "uploaded_count": names.len()-copy_files.len(), "project": p}),
+        serde_json::json!({"success": true, "version": version, "platform": plat, "file_count": file_count, "copied_count": copy_files.len(), "uploaded_count": file_count-copy_files.len(), "project": p}),
     ))
 }
 #[derive(Deserialize)]

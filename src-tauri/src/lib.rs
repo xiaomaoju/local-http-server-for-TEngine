@@ -2,8 +2,17 @@ mod config;
 mod credentials;
 mod server;
 mod sync;
+mod local_resources;
+mod apk;
+mod attachments;
+#[path = "../../shared/attachments.rs"]
+mod attachment_store;
+#[path = "../../shared/resources.rs"]
+mod resources;
+#[path = "../../server/src/storage.rs"]
+mod resource_storage;
 
-use config::{AppConfig, ProjectConfig};
+use config::{AppConfig, ProjectConfig, ProjectType};
 use server::{LogEntry, RunningServer};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,17 +36,27 @@ async fn get_projects(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Proj
 
 /// 添加新项目
 #[tauri::command]
-async fn add_project(state: tauri::State<'_, Arc<AppState>>) -> Result<ProjectConfig, String> {
+async fn add_project(project_type: Option<ProjectType>, state: tauri::State<'_, Arc<AppState>>) -> Result<ProjectConfig, String> {
     let mut config = state.config.lock().await;
     let mut project = ProjectConfig::default();
+    project.project_type = project_type.unwrap_or_default();
+    if let Some(plat) = project.project_type.fixed_platform() {
+        project.platforms = vec![plat.into()];
+        project.platform_access = HashMap::from([(plat.into(), true)]);
+        project.package_name.clear();
+    }
     // 自动分配不冲突的端口
     let used_ports: Vec<u16> = config.projects.iter().map(|p| p.port).collect();
     while used_ports.contains(&project.port) {
         project.port += 1;
     }
-    project.project_name = format!("Project_{}", config.projects.len() + 1);
-    config.projects.push(project.clone());
-    config.save()?;
+    let mut number = config.projects.len() + 1;
+    while config.projects.iter().any(|p| p.project_type == project.project_type && p.project_name == format!("Project_{number}")) { number += 1; }
+    project.project_name = format!("Project_{number}");
+    let mut next = config.clone();
+    next.projects.push(project.clone());
+    next.save()?;
+    *config = next;
     Ok(project)
 }
 
@@ -55,21 +74,49 @@ async fn remove_project(
         }
     }
     let mut config = state.config.lock().await;
-    config.projects.retain(|p| p.id != project_id);
-    config.save()
+    let mut next = config.clone();
+    next.projects.retain(|p| p.id != project_id);
+    next.save()?;
+    *config = next;
+    if let Ok(directory) = local_resources::storage().project_dir(&project_id) {
+        if directory.exists() { std::fs::remove_dir_all(directory).map_err(|e| e.to_string())?; }
+    }
+    Ok(())
 }
 
 /// 更新项目配置
 #[tauri::command]
 async fn update_project(
-    project: ProjectConfig,
+    mut project: ProjectConfig,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let mut config = state.config.lock().await;
-    if let Some(existing) = config.projects.iter_mut().find(|p| p.id == project.id) {
-        *existing = project;
+    let existing = config.projects.iter().find(|p| p.id == project.id).ok_or("项目不存在")?;
+    if project.project_type != existing.project_type { return Err("项目类型创建后不可修改".into()); }
+    if state.servers.lock().await.contains_key(&project.id) { return Err("请先停止服务，再修改项目设置".into()); }
+    project.project_name = project.project_name.trim().into();
+    resources::sanitize_path_component(&project.project_name)?;
+    resources::sanitize_path_component(&project.project_version)?;
+    if project.port < 1024 { return Err("端口需在 1024–65535 之间".into()); }
+    if project.project_name != existing.project_name && config.projects.iter().any(|p| p.id != project.id && p.project_type == project.project_type && p.project_name == project.project_name) { return Err("此类型已存在同名项目".into()); }
+    if let Some(plat) = project.project_type.fixed_platform() {
+        project.platforms = vec![plat.into()];
+        project.package_name.clear();
+        project.platform_access.retain(|p, _| p == plat);
+    } else {
+        resources::sanitize_path_component(&project.package_name)?;
+        if project.platforms.is_empty() { return Err("请选择至少一个平台".into()); }
+        for plat in &project.platforms { resources::sanitize_path_component(plat)?; }
     }
-    config.save()
+    project.active_releases = existing.active_releases.clone();
+    project.published_releases = existing.published_releases.clone();
+    project.attachment_snapshot = existing.attachment_snapshot.clone();
+    let mut next = config.clone();
+    let index = next.projects.iter().position(|p| p.id == project.id).unwrap();
+    next.projects[index] = project;
+    next.save()?;
+    *config = next;
+    Ok(())
 }
 
 /// 启动服务器
@@ -97,8 +144,9 @@ async fn start_server(
     }
 
     // 设置 server root 符号链接
-    let server_root =
-        sync::setup_server_root(&project.bundles_dir, &project.project_name, &project.project_version)?;
+    let server_root = if project.project_type == ProjectType::Bundle {
+        sync::setup_server_root(&project.bundles_dir, &project.project_name, &project.project_version)?
+    } else { AppConfig::resources_dir() };
 
     // 创建日志通道
     let (log_tx, mut log_rx) = tokio::sync::mpsc::channel::<LogEntry>(256);
@@ -122,11 +170,12 @@ async fn start_server(
         project.port,
         project.cors_enabled,
         project.platform_access.clone(),
+        if project.project_type == ProjectType::Bundle { None } else { Some(state.inner().clone()) },
         log_tx,
     )
     .await?;
 
-    let url = format!("http://127.0.0.1:{}/{}/{}/", running.port, project.project_version, project.project_name);
+    let url = format!("http://127.0.0.1:{}/{}/{}/{}/", running.port, project.project_type.namespace(), urlencoding::encode(&project.project_version), urlencoding::encode(&project.project_name));
 
     let mut servers = state.servers.lock().await;
     servers.insert(project_id, running);
@@ -635,9 +684,46 @@ async fn incremental_upload_to_remote(
 
 // ===================== App Entry =====================
 
+#[tauri::command]
+async fn upload_files_to_remote(paths: Vec<String>, project_type: ProjectType, project_id: String, project_version: String, version: String, server_url: String, token: String) -> Result<RemoteUploadResult, String> {
+    let platform = project_type.fixed_platform().ok_or("Bundle 项目请使用资源上传")?;
+    resources::sanitize_path_component(&project_id)?;
+    resources::sanitize_path_component(&project_version)?;
+    if !version.is_empty() || project_type == ProjectType::Apk { project_type.validate_version(&version)?; }
+    let files = local_resources::describe_files(&paths)?;
+    project_type.validate_files(&files.iter().map(|f| f.name.clone()).collect::<Vec<_>>())?;
+    if files.iter().map(|f| f.size).sum::<u64>() > 512 * 1024 * 1024 { return Err("单次上传最多 512MB".into()); }
+    let mut form = reqwest::multipart::Form::new().text("platform", platform.to_owned()).text("version", version);
+    for file in files {
+        let reader = tokio::fs::File::open(&file.path).await.map_err(|e| e.to_string())?;
+        let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(reader));
+        let part = reqwest::multipart::Part::stream_with_length(body, file.size).file_name(file.name);
+        form = form.part("files", part);
+    }
+    let url = format!("{}/api/projects/{}/project-versions/{}/upload", server_url.trim_end_matches('/'), project_id, urlencoding::encode(&project_version));
+    let response = reqwest::Client::builder().timeout(std::time::Duration::from_secs(600)).build().map_err(|e| e.to_string())?.post(url).bearer_auth(token).multipart(form).send().await.map_err(|e| format!("上传失败：{e}"))?;
+    let status = response.status();
+    if !status.is_success() { return Err(format!("服务器返回 {status}: {}", response.text().await.unwrap_or_default())); }
+    response.json().await.map_err(|e| format!("解析响应失败：{e}"))
+}
+
+#[tauri::command]
+async fn upload_apk_release_to_remote(directory: String, version: String, fingerprint: String, project_id: String, project_version: String, server_url: String, token: String) -> Result<RemoteUploadResult, String> {
+    let (_snapshot, paths) = apk::prepare(directory, version.clone(), fingerprint, apk::staging_root()).await?;
+    upload_files_to_remote(paths, ProjectType::Apk, project_id, project_version, version, server_url, token).await
+}
+
+#[tauri::command]
+async fn import_local_apk_release(directory: String, version: String, fingerprint: String, project_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
+    if state.config.lock().await.projects.iter().find(|p| p.id == project_id).ok_or("项目不存在")?.project_type != ProjectType::Apk { return Err("请选择 APK 项目".into()); }
+    let (_snapshot, paths) = apk::prepare(directory, version.clone(), fingerprint, apk::staging_root()).await?;
+    local_resources::import_local_release(project_id, paths, version, state).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = AppConfig::load();
+    attachments::cleanup(&config);
     let app_state = Arc::new(AppState {
         config: Mutex::new(config),
         servers: Mutex::new(HashMap::new()),
@@ -670,6 +756,22 @@ pub fn run() {
             upload_version_to_remote,
             compute_local_manifest,
             incremental_upload_to_remote,
+            upload_files_to_remote,
+            upload_apk_release_to_remote,
+            import_local_apk_release,
+            apk::list_local_apk_releases,
+            local_resources::describe_upload_files,
+            local_resources::import_local_release,
+            local_resources::list_local_releases,
+            local_resources::list_local_release_files,
+            local_resources::activate_local_release,
+            local_resources::delete_local_release,
+            local_resources::set_local_download_access,
+            attachments::list_local_attachments,
+            attachments::read_attachment_directory,
+            attachments::upload_local_attachments,
+            attachments::delete_local_attachment,
+            attachments::upload_remote_attachments,
         ])
         .run(tauri::generate_context!())
         .expect("启动应用失败");

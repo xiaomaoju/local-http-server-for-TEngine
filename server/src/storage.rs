@@ -1,20 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-pub fn sanitize_path_component(s: &str) -> Result<&str, String> {
-    if s.is_empty()
-        || s.len() > 200
-        || s.trim() != s
-        || s == "."
-        || s.contains('/')
-        || s.contains('\\')
-        || s.contains("..")
-        || s.chars().any(|c| c.is_control() || ":*?\"<>|".contains(c))
-    {
-        return Err(format!("Invalid path component: {}", s));
-    }
-    Ok(s)
-}
+pub use crate::resources::sanitize_path_component;
 
 pub struct Storage {
     resources_dir: PathBuf,
