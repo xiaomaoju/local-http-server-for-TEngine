@@ -111,7 +111,9 @@ jobs:
           fs.mkdirSync('Cache/release', { recursive: true });
           const files = JSON.parse(process.env.TAURI_ARTIFACTS).filter(file => fs.statSync(file).isFile() && /\.(exe|msi|dmg|deb|AppImage)$/.test(file));
           if (!files.length) throw new Error('No desktop installers were produced');
-          for (const file of files) fs.copyFileSync(file, path.join('Cache/release', path.basename(file)));
+          // GitHub replaces spaces in uploaded asset names with dots. Normalize
+          // before checksumming so SHA256SUMS uses the downloadable filenames.
+          for (const file of files) fs.copyFileSync(file, path.join('Cache/release', path.basename(file).replaceAll(' ', '.')));
           JS
       - name: Create Windows portable ZIP
         if: runner.os == 'Windows'
