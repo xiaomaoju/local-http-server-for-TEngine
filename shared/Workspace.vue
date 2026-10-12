@@ -45,6 +45,7 @@ import {
   type User,
   type ProjectConfig,
   type VersionEntry,
+  type ApkDownloadStats,
   type FileEntry,
   type LogEntry,
   type ResourceRequestLog,
@@ -89,6 +90,20 @@ const busy = ref(false);
 const loading = ref(false);
 const logState = ref<"connecting" | "live" | "retrying">("connecting");
 const versions = ref<VersionEntry[]>([]);
+const versionsAvailable = ref(false);
+const downloadStats = ref<ApkDownloadStats | null>(null);
+const downloadStatsState = ref<"loading" | "ready" | "unsupported" | "failed">("loading");
+const downloadStatsLoading = ref(false);
+let downloadStatsGeneration = 0;
+const downloadCounts = computed(() => new Map(downloadStats.value?.releases.map(r => [r.release, r.downloads]) || []));
+const deletedDownloadCounts = computed(() => {
+  const existing = new Set(versions.value.map(v => v.version));
+  return downloadStats.value?.releases.filter(r => !existing.has(r.release)) || [];
+});
+const downloadStatsLabel = computed(() => ({ loading: "加载中…", ready: "", unsupported: "不支持统计", failed: "暂不可用" })[downloadStatsState.value]);
+function downloadCount(release: string) {
+  return downloadStatsState.value === "ready" ? (downloadCounts.value.get(release) || 0).toLocaleString("zh-CN") : "—";
+}
 const logs = ref<LogEntry[]>([]);
 const resourceLogs = ref<ResourceRequestLog[]>([]);
 const resourceLogsAvailable = ref<boolean | null>(null);
@@ -385,19 +400,44 @@ async function loadVersions(silent = false) {
     return;
   }
   if (!silent) loading.value = true;
+  if (p.project_type === "apk") void loadDownloadStats();
   try {
     const result = await api.request<VersionEntry[]>(
       `${resourcePath(p, version)}/versions?platform=${encodeURIComponent(plat)}`,
     );
     if (generation === loadGeneration) {
       versions.value = result;
+      versionsAvailable.value = true;
       tablePage.value = Math.min(
         tablePage.value,
         Math.max(1, Math.ceil(result.length / 50)),
       );
     }
+  } catch (e) {
+    if (generation === loadGeneration) versionsAvailable.value = false;
+    throw e;
   } finally {
     if (generation === loadGeneration) loading.value = false;
+  }
+}
+async function loadDownloadStats() {
+  const p = project.value;
+  const version = projectVersion.value;
+  const generation = ++downloadStatsGeneration;
+  if (!p || p.project_type !== "apk" || !version) return;
+  downloadStatsLoading.value = true;
+  try {
+    const result = await api.apkDownloadStats(p, version);
+    if (generation !== downloadStatsGeneration) return;
+    downloadStats.value = result;
+    downloadStatsState.value = "ready";
+  } catch (e) {
+    if (generation !== downloadStatsGeneration) return;
+    downloadStats.value = null;
+    downloadStatsState.value = e instanceof ApiError && e.status === 404 ? "unsupported" : "failed";
+    if (e instanceof ApiError && e.status === 401) await expireSession();
+  } finally {
+    if (generation === downloadStatsGeneration) downloadStatsLoading.value = false;
   }
 }
 async function refresh(silent = false) {
@@ -1359,6 +1399,14 @@ watch(uploadPhase, text => addClientLog(text));
 watch([error, dialogError, diffError], (values, previous) => {
   values.forEach((text, i) => { if (text && text !== previous[i]) addClientLog(text, "error"); });
 });
+watch([selected, projectVersion, serverUrl, connectionId, () => user.value?.id], () => {
+  ++downloadStatsGeneration;
+  downloadStats.value = null;
+  downloadStatsState.value = "loading";
+  downloadStatsLoading.value = false;
+  versionsAvailable.value = false;
+  if (panel.value === "download-stats") panel.value = "";
+}, { flush: "sync" });
 watch([selected, projectVersion, platform, () => user.value?.id], () => {
   autoPublish.value = readPreference(preferenceKey("autoPublish", selected.value, projectVersion.value, platform.value), false);
 });
@@ -1695,12 +1743,19 @@ onBeforeUnmount(() => {
                 添加项目版本
               </button>
             </div>
-            <div v-else class="ui-table-wrap">
+            <div v-if="projectKind === 'apk' && projectVersion" class="ui-status" aria-label="APK 下载统计">
+              <span>本项目版本累计下载 <strong class="ui-mono">{{ downloadStatsState === 'ready' ? downloadStats!.total.toLocaleString('zh-CN') + ' 次' : downloadStatsLabel }}</strong></span>
+              <button class="ui-action" @click="panel = 'download-stats'">统计详情</button>
+              <span class="ui-spacer" />
+              <button class="ui-action" :disabled="downloadStatsLoading" @click="loadDownloadStats"><RefreshCw :size="14" />{{ downloadStatsLoading ? '刷新中…' : '刷新统计' }}</button>
+            </div>
+            <div v-if="projectVersion" class="ui-table-wrap">
               <table class="ui-table">
                 <thead>
                   <tr>
                     <th>资源版本</th>
                     <th>状态</th>
+                    <th v-if="projectKind === 'apk'" class="num">下载次数</th>
                     <th class="num">文件</th>
                     <th class="num">大小</th>
                     <th class="ui-secondary-column">更新时间</th>
@@ -1711,9 +1766,9 @@ onBeforeUnmount(() => {
                   <template v-if="loading && !versions.length"
                     ><tr v-for="n in 8" :key="n">
                       <td
-                        v-for="k in 6"
+                        v-for="k in projectKind === 'apk' ? 7 : 6"
                         :key="k"
-                        :class="k === 5 ? 'ui-secondary-column' : ''"
+                        :class="k === (projectKind === 'apk' ? 6 : 5) ? 'ui-secondary-column' : ''"
                       >
                         <div class="ui-skeleton" />
                       </td></tr
@@ -1732,6 +1787,7 @@ onBeforeUnmount(() => {
                       <td>
                         <StatusBadge :tone="v.version === settings?.active_bundle ? 'success' : 'neutral'">{{ v.version === settings?.active_bundle ? '已发布' : projectKind === 'apk' && settings?.published_releases?.includes(v.version) ? '历史发布' : '待发布' }}</StatusBadge>
                       </td>
+                      <td v-if="projectKind === 'apk'" class="num" :aria-label="'资源版本 ' + v.version + ' 下载次数'" :title="downloadStatsLabel">{{ downloadCount(v.version) }}</td>
                       <td class="num">{{ v.file_count }}</td>
                       <td class="num">{{ sizeText(v.total_size) }}</td>
                       <td class="ui-secondary-column ui-mono">
@@ -2222,6 +2278,22 @@ onBeforeUnmount(() => {
         </button></template
       ></Dialog
     >
+    <Dialog :open="panel === 'download-stats'" title="下载统计" @close="closePanel">
+      <div class="ui-form">
+        <p>{{ project?.project_name }} / {{ projectVersion }}</p>
+        <p class="ui-muted">从服务端启用统计起累计，不回填旧下载。每次完整读取 APK 响应计一次，重复下载重复计数；不代表安装成功或独立设备数。</p>
+        <p class="ui-muted">不统计 catalog、教程、HEAD、失败和已检测到的中断。累计次数包含已删除 APK 的历史下载；改名保留，删除整个项目或项目版本时清理。</p>
+        <p v-if="downloadStatsState !== 'ready'" role="status">{{ downloadStatsLabel }}</p>
+        <template v-else>
+          <strong>已删除 APK 的历史下载</strong>
+          <p v-if="!versionsAvailable || loading" class="ui-muted">资源列表尚未加载，暂无法区分已删除的 APK。</p>
+          <div v-else-if="deletedDownloadCounts.length" class="ui-table-wrap">
+            <table class="ui-table"><thead><tr><th>资源版本</th><th class="num">下载次数</th></tr></thead><tbody><tr v-for="row in deletedDownloadCounts" :key="row.release"><td class="ui-mono">{{ row.release }}</td><td class="num">{{ row.downloads.toLocaleString('zh-CN') }}</td></tr></tbody></table>
+          </div>
+          <p v-else class="ui-muted">暂无已删除 APK 的下载记录。</p>
+        </template>
+      </div>
+    </Dialog>
     <Dialog :open="diffOpen" :title="'上传差异 · ' + uploadVersion" wide :busy="busy" @close="diffOpen = false">
       <div v-if="uploadDiff && diffOpen" class="ui-form">
         <p class="ui-muted">{{ project?.project_name }} / {{ projectVersion }} / {{ platform }} · {{ uploadDiff.baseVersion ? '基于 ' + uploadDiff.baseVersion : '首次上传，所有文件均为新增' }}</p>

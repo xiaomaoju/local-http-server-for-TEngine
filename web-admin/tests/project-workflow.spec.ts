@@ -71,8 +71,8 @@ test('platform switches, clickable project rows and persistent project/version t
   await expect(page.getByRole('columnheader', {name: '操作', exact: true})).toHaveCount(0);
   await row.getByText('Android · iOS').click();
   await page.getByRole('button', {name:'v2', exact:true}).click();
-  await page.getByRole('button', {name:'协作项目', exact:true}).click();
-  await page.getByRole('button', {name:'星海计划', exact:true}).click();
+  await page.getByRole('button', {name:'协作项目 · Bundle', exact:true}).click();
+  await page.getByRole('button', {name:'星海计划 · Bundle', exact:true}).click();
   await expect(page.getByRole('button', {name:'v2', exact:true})).toHaveAttribute('aria-pressed','true');
   await page.getByRole('button', {name:'新增版本', exact:true}).click();
   await page.getByLabel('项目版本名称', {exact:true}).fill('v3');
@@ -85,7 +85,7 @@ test('platform switches, clickable project rows and persistent project/version t
 
 test('release preference is scoped and native directory/diff survive reopening', async ({page}) => {
   await fixture(page,true);
-  await page.getByRole('button',{name:'星海计划',exact:true}).click();
+  await page.getByRole('button',{name:'星海计划 · Bundle',exact:true}).click();
   await page.getByRole('radio',{name:'自动发布',exact:true}).click();
   await page.getByRole('button',{name:'v2',exact:true}).click();await expect(page.getByRole('radio',{name:'手动发布',exact:true})).toBeChecked();
   await page.getByRole('button',{name:'v1',exact:true}).click();await expect(page.getByRole('radio',{name:'自动发布',exact:true})).toBeChecked();
@@ -101,7 +101,7 @@ test('release preference is scoped and native directory/diff survive reopening',
 
 for (const outcome of ['manual','automatic','failure','concurrent']) test(`upload ${outcome} has truthful release status`, async ({page}) => {
   const state=await fixture(page,true);state.failPublish=outcome==='failure';state.concurrentPublish=outcome==='concurrent';
-  await page.getByRole('button',{name:'星海计划',exact:true}).click();if(outcome!=='manual')await page.getByRole('radio',{name:'自动发布',exact:true}).click();
+  await page.getByRole('button',{name:'星海计划 · Bundle',exact:true}).click();if(outcome!=='manual')await page.getByRole('radio',{name:'自动发布',exact:true}).click();
   await page.getByRole('button',{name:'上传资源',exact:true}).first().click();await page.getByRole('button',{name:'选择 Bundles 目录',exact:true}).click();
   await page.getByRole('button',{name:outcome==='manual'?'确认上传':'上传并自动发布',exact:true}).click();
   if(outcome==='automatic'){await expect(page.getByText('上传完成并已自动发布，客户端将读取此版本。')).toBeVisible();expect(state.publications).toBe(1);}else{await expect(page.getByText('native-r2 已上传，尚未发布')).toBeVisible();if(outcome!=='manual')await expect(page.getByRole('alert')).toContainText('资源已上传，但自动发布失败');expect(state.publications).toBe(outcome==='failure'?1:0);}
@@ -109,7 +109,7 @@ for (const outcome of ['manual','automatic','failure','concurrent']) test(`uploa
 });
 
 test('long file names stay complete and deletion is a direct row action', async ({page}) => {
-  await fixture(page);await page.getByRole('button',{name:'星海计划',exact:true}).click();
+  await fixture(page);await page.getByRole('button',{name:'星海计划 · Bundle',exact:true}).click();
   await expect(page.getByRole('button',{name:'删除资源版本 old',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:/更多操作/})).toHaveCount(0);
   await page.getByRole('button',{name:'查看文件',exact:true}).click();const name=page.getByRole('cell',{name:longName,exact:true});await expect(name).toBeVisible();expect(await name.evaluate(el=>getComputedStyle(el).whiteSpace)).toBe('normal');expect(await name.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBeTruthy();
 });
@@ -121,7 +121,7 @@ test('manifest comparison keeps all four categories and exact byte counts', () =
 
 test('platform tabs add a platform without replacing existing project configuration', async ({page}) => {
   const state=await fixture(page);
-  await page.getByRole('button',{name:'星海计划',exact:true}).click();
+  await page.getByRole('button',{name:'星海计划 · Bundle',exact:true}).click();
   await expect(page.getByRole('combobox',{name:'平台',exact:true})).toHaveCount(0);
   await page.getByRole('button',{name:'新增平台',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'新增平台'});
@@ -137,7 +137,7 @@ test('platform tabs add a platform without replacing existing project configurat
 
 test('upload automatically refreshes latest local and uploaded versions while keeping manual comparison',async({page})=>{
   const state=await fixture(page,true);
-  await page.getByRole('button',{name:'星海计划',exact:true}).click();
+  await page.getByRole('button',{name:'星海计划 · Bundle',exact:true}).click();
   // A collaborator uploaded this after the workbench loaded; it is not published.
   state.versions.unshift({version:'newer-upload',file_count:3,total_size:30,modified_timestamp:3});
   await page.evaluate(()=>{(window as any).nativeFixture.versions=async()=>[
@@ -168,7 +168,7 @@ test('upload automatically refreshes latest local and uploaded versions while ke
 
 test('exclusive controls expose radio behavior and disabled actions explain themselves',async({page})=>{
   await fixture(page,true);
-  await page.getByRole('button',{name:'星海计划',exact:true}).click();
+  await page.getByRole('button',{name:'星海计划 · Bundle',exact:true}).click();
   const modes=page.getByRole('radiogroup',{name:'发布方式',exact:true});
   await expect(modes.getByRole('radio',{checked:true})).toHaveCount(1);
   const manual=modes.getByRole('radio',{name:'手动发布',exact:true});
@@ -204,7 +204,7 @@ test('exclusive controls expose radio behavior and disabled actions explain them
 
 test('desktop log drawer scopes live events, retains upload errors and clears revoked history', async ({page}) => {
   const state = await fixture(page, true);
-  await page.getByRole('button', {name:'星海计划', exact:true}).click();
+  await page.getByRole('button', {name:'星海计划 · Bundle', exact:true}).click();
   const drawer = page.getByRole('region', {name:'客户端日志', exact:true});
   const toggle = drawer.getByRole('button', {name:/^日志/});
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -227,12 +227,12 @@ test('desktop log drawer scopes live events, retains upload errors and clears re
   await expect(drawer.getByText(/资源已上传，但自动发布失败/)).toBeVisible();
   await expect(toggle).toContainText('1 条错误');
   await page.screenshot({animations:'disabled',path:'../Cache/debug/client-logs/drawer-events-960.png'});
-  await page.getByRole('button', {name:'协作项目',exact:true}).click();
+  await page.getByRole('button', {name:'协作项目 · Bundle',exact:true}).click();
   await expect(drawer.getByText(/资源已上传，但自动发布失败/)).toHaveCount(0);
   await expect(drawer.getByText(/协作发布记录/)).toBeVisible();
   state.projects.splice(0,1);
   await page.evaluate(() => (window as any).emitLog({type:'access_changed'}));
-  await expect(page.getByRole('button', {name:'星海计划',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button', {name:'星海计划 · Bundle',exact:true})).toHaveCount(0);
   await page.getByRole('button', {name:'项目列表',exact:true}).click();
   await expect(drawer.getByText(/清空后的新记录|自动发布失败/)).toHaveCount(0);
   await page.setViewportSize({width:800,height:600});
@@ -244,7 +244,7 @@ test('desktop log drawer scopes live events, retains upload errors and clears re
 
 test('resource request flood cannot evict, scroll, count errors in or clear operation logs', async ({page}) => {
   await fixture(page,true);
-  await page.getByRole('button',{name:'星海计划',exact:true}).click();
+  await page.getByRole('button',{name:'星海计划 · Bundle',exact:true}).click();
   const drawer=page.getByRole('region',{name:'客户端日志',exact:true});
   await drawer.getByRole('button',{name:/^日志/}).click();
   const operations=drawer.getByRole('tab',{name:/操作日志/});

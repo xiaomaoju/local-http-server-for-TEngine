@@ -220,6 +220,17 @@ pub async fn authorized(
     Ok((u, p))
 }
 pub async fn save(pool: &SqlitePool, p: &mut ProjectConfig) -> ApiResult<()> {
+    save_on(&mut *pool.acquire().await?, p).await
+}
+pub async fn save_renamed_version(pool: &SqlitePool, p: &mut ProjectConfig, old: &str, new: &str) -> ApiResult<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE apk_download_scopes SET project_version = ? WHERE project_id = ? AND project_version = ?")
+        .bind(new).bind(&p.id).bind(old).execute(&mut *tx).await?;
+    save_on(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(())
+}
+async fn save_on(connection: &mut sqlx::SqliteConnection, p: &mut ProjectConfig) -> ApiResult<()> {
     let config = serde_json::to_string(p).map_err(|_| ApiError::bad("项目配置无效"))?;
     let result = sqlx::query(
         "UPDATE projects SET config = ?, revision = revision + 1 WHERE id = ? AND revision = ?",
@@ -227,7 +238,7 @@ pub async fn save(pool: &SqlitePool, p: &mut ProjectConfig) -> ApiResult<()> {
     .bind(config)
     .bind(&p.id)
     .bind(p.revision)
-    .execute(pool)
+    .execute(connection)
     .await?;
     if result.rows_affected() != 1 {
         return Err(ApiError::conflict("项目已被他人修改，请重新加载后再保存"));

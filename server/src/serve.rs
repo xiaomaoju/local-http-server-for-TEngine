@@ -76,7 +76,9 @@ pub async fn serve_resource(
         _ => return fail(log, StatusCode::NOT_FOUND, "资源路径格式无效"),
     };
     let docs = kind == ProjectType::Apk && parts.len() == 4 && parts[2] == "docs";
-    let _attachment_guard = if docs { Some(state.mutation.lock().await) } else { None };
+    // Resolve the name, stable statistics scope and file under the same mutation
+    // lock; release it before streaming so downloads never block management.
+    let _resource_guard = if kind == ProjectType::Apk { Some(state.mutation.lock().await) } else { None };
     // The public name path is /res/version/name/platform/file. Existing UUID paths
     // still resolve without relocating resources or mutating stored project IDs.
     let legacy = if kind == ProjectType::Bundle && uuid::Uuid::parse_str(&parts[0]).is_ok() { db::project(&state.db, &parts[0]).await.ok().filter(|p| p.project_type == ProjectType::Bundle) } else { None };
@@ -179,10 +181,25 @@ pub async fn serve_resource(
     headers.insert(header::CONTENT_SECURITY_POLICY, "sandbox; default-src 'none'".parse().unwrap());
     headers.insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
     if req.method() == "HEAD" || size == 0 {
+        if pinned && req.method() == "GET" {
+            match crate::apk_downloads::scope(&state.db, &project.id, version).await {
+                Ok(scope) => crate::apk_downloads::increment(state.db.clone(), scope, active.to_owned()).await,
+                Err(error) => tracing::error!(%error, "空 APK 下载计数保存失败"),
+            }
+        }
         resource_logs::publish(&state, log, 200, "completed", if req.method() == "HEAD" { "资源存在（HEAD）" } else { "空文件响应完成" });
         return (headers, Body::empty()).into_response();
     }
     let reader = LoggedReader { file: crate::attachment_store::Reader { file, _lease: None }, state: state.clone(), log: Some(log), remaining: size };
+    if pinned {
+        match crate::apk_downloads::scope(&state.db, &project.id, version).await {
+            Ok(scope) => {
+                let counted = crate::apk_downloads::CountedReader::new(reader, size, state.db.clone(), scope, active.to_owned());
+                return (headers, Body::from_stream(ReaderStream::new(counted))).into_response();
+            }
+            Err(error) => tracing::error!(%error, project_id = %project.id, project_version = version, "APK 下载统计标识读取失败"),
+        }
+    }
     (headers, Body::from_stream(ReaderStream::new(reader))).into_response()
 }
 

@@ -79,6 +79,8 @@
 
 catalog 格式、接口、快照存储、路径限制与兼容性见 [APK 更新说明](docs/apk-updates.md)，权限及日志细节见 [多用户工作台](docs/multiuser.md)。资源请求仅在内存保留最近 500 条，重启清空；操作日志持久化。
 
+远程 APK 下载次数由 `server/src/apk_downloads.rs` 独立维护并持久化到 SQLite，按项目、项目版本及资源发布编号隔离；项目版本改名必须通过 `db::save_renamed_version` 原子保留统计标识。计数口径与迁移说明见 [APK 下载统计](docs/apk-updates.md#下载统计)。
+
 ## 远程服务（Docker）
 
 默认服务端口为 **8083**，可与使用 8082 的旧版并行运行。生产环境通过 HTTPS 访问；可使用群晖 / Nginx 反向代理，也可配置服务端 TLS。

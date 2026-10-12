@@ -48,6 +48,10 @@ export interface VersionEntry {
   total_size: number;
   modified_timestamp: number;
 }
+export interface ApkDownloadStats {
+  total: number;
+  releases: { release: string; downloads: number }[];
+}
 export interface FileEntry {
   name: string;
   size: number;
@@ -135,6 +139,9 @@ export class RemoteApi {
   }
   getToken() {
     return this.token;
+  }
+  apkDownloadStats(project: ProjectConfig, version: string) {
+    return this.request<ApkDownloadStats>(`${resourcePath(project, version)}/download-stats`);
   }
   rememberProject(project: ProjectConfig) { this.revisions.set(project.id, project.revision); }
   clear() {

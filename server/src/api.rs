@@ -23,6 +23,7 @@ use tower_http::cors::CorsLayer;
 
 pub fn build_router(state: Arc<AppState>, protocol: Protocol) -> Router {
     let protected = Router::new()
+        .route("/api/projects/:id/project-versions/:pver/download-stats", get(crate::apk_downloads::stats))
         .route("/api/projects/:id/project-versions/:pver/attachments", get(crate::attachments::list).post(crate::attachments::upload).layer(DefaultBodyLimit::max(512 * 1024 * 1024)))
         .route("/api/projects/:id/project-versions/:pver/attachments/:name", axum::routing::delete(crate::attachments::delete))
         .route("/api/auth/me", get(auth::me))
@@ -539,7 +540,7 @@ async fn rename_project_version(
     storage(&state)
         .rename_project_version(&id, &pver, &req.name)
         .map_err(ApiError::bad)?;
-    if let Err(e) = db::save(&state.db, &mut p).await {
+    if let Err(e) = db::save_renamed_version(&state.db, &mut p, &pver, &req.name).await {
         let _ = storage(&state).rename_project_version(&id, &req.name, &pver);
         return Err(e);
     }

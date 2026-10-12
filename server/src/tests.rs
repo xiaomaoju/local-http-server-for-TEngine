@@ -7,6 +7,7 @@ use axum::{
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tower::ServiceExt;
+mod apk_download_tests;
 
 #[tokio::test]
 async fn protected_startup_never_creates_a_missing_database() {
