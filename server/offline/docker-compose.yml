@@ -1,6 +1,6 @@
 services:
   tengine-server:
-    image: tengine-server:2.1.0-amd64
+    image: tengine-server:2.1.1-amd64
     platform: linux/amd64
     container_name: tengine-http-multiuser
     restart: unless-stopped

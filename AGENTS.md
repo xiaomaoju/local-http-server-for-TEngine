@@ -193,11 +193,11 @@ npm --prefix web-admin ci
 
 ### GitHub 自动发布
 
-当前发布版本为 `2.1.0`。提交并推送改动后，推送同版本标签即可触发 **Build & Release**：
+当前发布版本为 `2.1.1`。提交并推送改动后，推送同版本标签即可触发 **Build & Release**：
 
 ```sh
-git tag v2.1.0
-git push origin v2.1.0
+git tag v2.1.1
+git push origin v2.1.1
 ```
 
 工作流校验标签与版本文件一致，构建 Windows x64、macOS Apple Silicon / Intel、Linux x64 客户端，以及群晖 / Linux amd64 的 `TEngineHttpV2.zip` 离线包；全部成功后统一创建 GitHub Release 并上传附件与 `SHA256SUMS.txt`。普通分支推送不会发布。
